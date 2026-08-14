@@ -6,6 +6,7 @@ import { useT } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { clampedNumberInput, enabledProviders, modelsForProvider } from "./combo-workspace-utils";
+import { isProviderExhausted } from "../combo-workspace-data";
 
 export function StrategySeg({
   value,
@@ -89,12 +90,14 @@ export function TargetEditor({
   providers,
   models,
   onChange,
+  exhaustedProviders,
 }: {
   targets: ComboTarget[];
   strategy: ComboStrategy;
   providers: ProviderOption[];
   models: ModelOption[];
   onChange: (next: ComboTarget[]) => void;
+  exhaustedProviders?: ReadonlySet<string>;
 }) {
   const t = useT();
   const provs = enabledProviders(providers);
@@ -127,6 +130,7 @@ export function TargetEditor({
         const modelSelectDisabled = !row.provider;
         const dragging = dragIndex === index;
         const dropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
+        const targetExhausted = row.provider && isProviderExhausted(row.provider, exhaustedProviders);
         return (
           <div
             key={row.clientKey ?? `${row.provider}:${row.model}`}
@@ -236,6 +240,11 @@ export function TargetEditor({
                   update(index, { weight });
                 }}
               />
+            )}
+            {targetExhausted && (
+              <span className="cwi-target-quota-badge cwi-target-quota-badge--exhausted" title={t("cws.target.quotaExhausted")}>
+                {t("cws.target.quotaExhaustedShort")}
+              </span>
             )}
             <div className="cwi-target-actions">
               <button

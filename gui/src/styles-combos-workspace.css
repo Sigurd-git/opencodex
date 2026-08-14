@@ -477,6 +477,43 @@
   margin-top: 16px;
 }
 
+/* Quota badge on individual targets. */
+.cwi-target-quota-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--mono);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cwi-target-quota-badge--exhausted {
+  background: light-dark(#fef3f2, #3b1210);
+  color: light-dark(#b42318, #fca5a5);
+  border: 1px solid light-dark(#fecdc9, #5c1d1a);
+}
+
+/* Banner shown when every target in a combo is quota-exhausted. */
+.cwi-exhausted-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: light-dark(#fef3f2, #3b1210);
+  color: light-dark(#b42318, #fca5a5);
+  font-size: var(--text-control);
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+
+.cwi-exhausted-banner svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 @media (max-width: 939px) {
   .combos-workspace-root {
     grid-template-columns: 1fr;

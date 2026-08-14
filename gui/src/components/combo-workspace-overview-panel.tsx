@@ -4,28 +4,31 @@ import { IconAlert, IconChevron, IconPlus } from "../icons";
 import { useT, type TFn } from "../i18n/shared";
 
 function attentionCopy(
-  reason: "empty-targets" | "few-targets" | "catalog-omitted",
+  reason: "empty-targets" | "few-targets" | "catalog-omitted" | "all-targets-exhausted",
   t: TFn,
 ): string {
   if (reason === "empty-targets") return t("cws.attention.empty");
   if (reason === "catalog-omitted") return t("cws.attention.catalogOmitted");
+  if (reason === "all-targets-exhausted") return t("cws.attention.allExhausted");
   return t("cws.attention.few");
 }
 
 export function OverviewPanel({
   combos,
   cataloguedComboIds,
+  exhaustedProviders,
   onSelect,
   onAdd,
 }: {
   combos: ComboItem[];
   cataloguedComboIds?: ReadonlySet<string>;
+  exhaustedProviders?: ReadonlySet<string>;
   onSelect: (id: string) => void;
   onAdd: () => void;
 }) {
   const t = useT();
   const sections = groupCombos(combos);
-  const attention = buildComboAttention(combos, { cataloguedComboIds });
+  const attentionWithQuota = buildComboAttention(combos, { cataloguedComboIds, exhaustedProviders });
 
   return (
     <div className="combos-workspace-overview">
@@ -47,11 +50,11 @@ export function OverviewPanel({
         <p className="muted" style={{ margin: 0 }}>{t("cws.howBody")}</p>
       </section>
 
-      {attention.length > 0 && (
+      {attentionWithQuota.length > 0 && (
         <section className="pwi-section" aria-label={t("cws.attentionTitle")}>
           <h3 className="pwi-section-title">{t("cws.attentionTitle")}</h3>
           <div className="cwi-attention-list">
-            {attention.map((item) => (
+            {attentionWithQuota.map((item) => (
               <button
                 key={`${item.id}:${item.reason}`}
                 type="button"

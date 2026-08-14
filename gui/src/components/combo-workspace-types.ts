@@ -21,6 +21,8 @@ export interface ComboWorkspaceProps {
   models: ModelOption[];
   /** Combo ids currently present in the live catalog (`provider === "combo"`). */
   cataloguedComboIds?: ReadonlySet<string>;
+  /** Provider names whose quota is fully exhausted (0 credits remaining). */
+  exhaustedProviders?: ReadonlySet<string>;
   loading?: boolean;
   onRefresh: () => void;
   onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;

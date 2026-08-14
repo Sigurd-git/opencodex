@@ -3,6 +3,7 @@ import ComboWorkspace from "../components/ComboWorkspace";
 import {
   type ComboItem,
   comboModelId,
+  exhaustedProvidersFromQuotaReports,
   parseComboList,
   toPutBody,
 } from "../combo-workspace-data";
@@ -35,6 +36,11 @@ type CachedCombosPage = {
   providers: ProviderOption[];
   models: ModelOption[];
   cataloguedComboIds: string[];
+};
+
+type QuotaReport = {
+  provider: string;
+  quota?: { creditsUsd?: { remaining?: number; unlimited?: boolean } };
 };
 
 function responseError(data: unknown): string | undefined {
@@ -87,6 +93,7 @@ export default function Combos({
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [exhaustedProviders, setExhaustedProviders] = useState<ReadonlySet<string>>(new Set());
 
   const notify = (msg: string, ok: boolean) => {
     setStatus(msg);
@@ -199,6 +206,24 @@ export default function Combos({
     { isEmpty: () => false, initialData: cached ?? undefined, enabled: active },
   );
   const { state } = resource;
+
+  // Fetch provider quota reports to identify exhausted targets. Best-effort: quota
+  // data enriches the UI but is not required for core combo functionality.
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/provider-quotas`);
+        if (!res.ok || cancelled) return;
+        const body = await res.json() as { reports?: QuotaReport[] };
+        if (cancelled) return;
+        const reports = Array.isArray(body?.reports) ? body.reports : [];
+        setExhaustedProviders(exhaustedProvidersFromQuotaReports(reports));
+      } catch { /* best-effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, [apiBase, active, state.data]);
 
   const data = state.data ?? retainedData ?? undefined;
   const combos = data?.combos ?? [];
@@ -313,6 +338,7 @@ export default function Combos({
           providers={providers}
           models={models}
           cataloguedComboIds={cataloguedComboIds}
+          exhaustedProviders={exhaustedProviders}
           loading={false}
           onRefresh={() => resource.refresh()}
           onSave={saveCombo}

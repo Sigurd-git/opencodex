@@ -8,7 +8,10 @@ import {
   updateComboAliasDraft,
   validateComboDraft,
 } from "../combo-workspace-data";
-import { IconChevron, IconTrash } from "../icons";
+import {
+  isProviderExhausted,
+} from "../combo-workspace-data";
+import { IconAlert, IconChevron, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
@@ -40,6 +43,7 @@ export function DetailPanel({
   onRequestRemove,
   onSave,
   onDirtyChange,
+  exhaustedProviders,
 }: {
   baseline: ComboItem;
   isCreate?: boolean;
@@ -55,6 +59,8 @@ export function DetailPanel({
   onRequestRemove?: () => void;
   onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;
   onDirtyChange: (dirty: boolean) => void;
+  /** Provider names whose quota is fully exhausted (0 credits remaining). */
+  exhaustedProviders?: ReadonlySet<string>;
 }) {
   const t = useT();
   const [tab, setTab] = useState<DetailTab>("config");
@@ -81,6 +87,10 @@ export function DetailPanel({
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
+  const allTargetsExhausted = exhaustedProviders !== undefined
+    && exhaustedProviders.size > 0
+    && draft.targets.length > 0
+    && draft.targets.every((target) => target.provider.trim() && isProviderExhausted(target.provider, exhaustedProviders));
   const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.nativeAlias}:${baseline.displayName ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
@@ -193,6 +203,13 @@ export function DetailPanel({
       </div>
 
       {msg && <Notice tone={msg.ok ? "ok" : "err"}>{msg.text}</Notice>}
+
+      {allTargetsExhausted && (
+        <div className="cwi-exhausted-banner" role="alert">
+          <IconAlert width={14} height={14} aria-hidden="true" />
+          <span>{t("cws.allTargetsExhausted")}</span>
+        </div>
+      )}
 
       {/*
         Pills, not an underline row. Combos is a tab of the Models page now, so an
@@ -350,6 +367,7 @@ export function DetailPanel({
                 providers={providers}
                 models={models}
                 onChange={(targets) => updateDraft((d) => ({ ...d, targets }))}
+                exhaustedProviders={exhaustedProviders}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {draft.strategy === "failover" ? t("cws.targets.failoverHint") : t("cws.targets.roundRobinHint")}

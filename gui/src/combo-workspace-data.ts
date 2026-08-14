@@ -84,7 +84,7 @@ export interface ComboSections {
 export interface ComboAttentionItem {
   id: string;
   model: string;
-  reason: "few-targets" | "empty-targets" | "catalog-omitted";
+  reason: "few-targets" | "empty-targets" | "catalog-omitted" | "all-targets-exhausted";
 }
 
 export const COMBO_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -207,10 +207,15 @@ export function filterCombos(items: ComboItem[], query: string): ComboItem[] {
 
 export function buildComboAttention(
   items: ComboItem[],
-  options: { cataloguedComboIds?: ReadonlySet<string> } = {},
+  options: {
+    cataloguedComboIds?: ReadonlySet<string>;
+    /** Providers whose quota is fully exhausted (0 credits remaining). */
+    exhaustedProviders?: ReadonlySet<string>;
+  } = {},
 ): ComboAttentionItem[] {
   const out: ComboAttentionItem[] = [];
   const catalogued = options.cataloguedComboIds;
+  const exhausted = options.exhaustedProviders;
   for (const item of items) {
     if (item.targets.length === 0) {
       out.push({ id: item.id, model: item.model, reason: "empty-targets" });
@@ -222,6 +227,15 @@ export function buildComboAttention(
     // in Codex's picker — flag that gap (#484).
     if (catalogued && item.targets.length > 0 && !catalogued.has(item.id)) {
       out.push({ id: item.id, model: item.model, reason: "catalog-omitted" });
+    }
+    // Every target points at a provider with an exhausted quota.
+    if (
+      exhausted
+      && exhausted.size > 0
+      && item.targets.length > 0
+      && item.targets.every((target) => exhausted.has(target.provider.trim()))
+    ) {
+      out.push({ id: item.id, model: item.model, reason: "all-targets-exhausted" });
     }
   }
   return out;
@@ -374,4 +388,33 @@ export function emptyDraft(id = ""): ComboItem {
     defaultEffort: null,
     targets: [newComboTarget()],
   };
+}
+
+/**
+ * Derives a set of provider names whose quota is fully exhausted
+ * from the /api/provider-quotas response shape.
+ */
+export function exhaustedProvidersFromQuotaReports(
+  reports: ReadonlyArray<{ provider: string; quota?: { creditsUsd?: { remaining?: number; unlimited?: boolean } } }>,
+): Set<string> {
+  const exhausted = new Set<string>();
+  for (const report of reports) {
+    const q = report.quota;
+    if (!q) continue;
+    const credits = q.creditsUsd;
+    if (!credits) continue;
+    if (credits.unlimited) continue;
+    if (typeof credits.remaining === "number" && credits.remaining <= 0) {
+      exhausted.add(report.provider);
+    }
+  }
+  return exhausted;
+}
+
+/** True when the provider has a quota report showing 0 remaining credits. */
+export function isProviderExhausted(
+  provider: string,
+  exhaustedProviders: ReadonlySet<string> | undefined,
+): boolean {
+  return exhaustedProviders !== undefined && exhaustedProviders.has(provider.trim());
 }

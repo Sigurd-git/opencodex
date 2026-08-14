@@ -21,6 +21,7 @@ export default function ComboWorkspace({
   providers,
   models,
   cataloguedComboIds,
+  exhaustedProviders,
   loading,
   onRefresh,
   onSave,
@@ -190,6 +191,7 @@ export default function ComboWorkspace({
             onRequestRemove={() => setRemoveId(baseline.id)}
             onSave={onSave}
             onDirtyChange={setDetailDirty}
+            exhaustedProviders={exhaustedProviders}
           />
         ) : creatingFirstCombo ? (
           <DetailPanel
@@ -209,11 +211,13 @@ export default function ComboWorkspace({
             }}
             onSave={onSave}
             onDirtyChange={setDetailDirty}
+            exhaustedProviders={exhaustedProviders}
           />
         ) : (
           <OverviewPanel
             combos={combos}
             cataloguedComboIds={cataloguedComboIds}
+            exhaustedProviders={exhaustedProviders}
             onSelect={(id) => trySelect(id)}
             onAdd={onAdd}
           />
