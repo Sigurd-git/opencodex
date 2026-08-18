@@ -510,19 +510,45 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
   });
 
   test("Kiro does not start a replacement until the canceled external CLI flow settles", async () => {
+    saveConfig(config());
     const originalLogin = OAUTH_PROVIDERS.kiro.login;
+    let loginCalls = 0;
     OAUTH_PROVIDERS.kiro.login = async (ctrl) => {
-      ctrl.onAuth({ url: "", deviceCode: "kiro-cancel-flow" });
-      await new Promise<never>((_, reject) => {
-        ctrl.signal.addEventListener("abort", () => reject(new Error("Kiro login cancelled")), { once: true });
-      });
+      loginCalls += 1;
+      const call = loginCalls;
+      ctrl.onAuth({ url: "", deviceCode: `kiro-flow-${call}` });
+      if (call === 1) {
+        await new Promise<never>((_, reject) => {
+          ctrl.signal.addEventListener("abort", () => reject(new Error("Kiro login cancelled")), { once: true });
+        });
+      }
+      return {
+        access: "kiro-replacement-access",
+        refresh: "kiro-replacement-refresh",
+        accountId: "kiro-replacement-account",
+        email: "kiro-replacement@example.test",
+        expires: Date.now() + 60_000,
+      };
     };
 
     try {
       await startLoginFlow("kiro");
       expect(cancelLoginFlow("kiro")).toBe(true);
       await expect(startLoginFlow("kiro")).rejects.toThrow("A login for kiro is already in progress");
-      await Bun.sleep(0);
+
+      let replacement: Awaited<ReturnType<typeof startLoginFlow>> | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        try {
+          replacement = await startLoginFlow("kiro");
+          break;
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes("already in progress")) throw error;
+          await Bun.sleep(5);
+        }
+      }
+      expect(replacement).toMatchObject({ deviceCode: "kiro-flow-2" });
+      expect(await waitForOAuthDone("kiro")).toMatchObject({ done: true, loggedIn: true });
+      expect(loginCalls).toBe(2);
     } finally {
       OAUTH_PROVIDERS.kiro.login = originalLogin;
       clearLoginState("kiro");
