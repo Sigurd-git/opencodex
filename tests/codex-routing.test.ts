@@ -119,6 +119,8 @@ describe("codex routing", () => {
   test("usage score uses the hottest known quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 81 })).toBe(81);
     expect(computeCodexUsageScore({ weeklyPercent: 15, monthlyPercent: 91 })).toBe(91);
+    expect(computeCodexUsageScore({ weeklyPercent: 15, monthlyPercent: 20, shortPercent: 92 })).toBe(92);
+    expect(computeCodexUsageScore({ shortPercent: 0 })).toBe(0);
     expect(computeCodexUsageScore({ weeklyPercent: 15 })).toBe(15);
   });
 
@@ -179,6 +181,7 @@ describe("codex routing", () => {
   test("go and free plans use only the 30d quota window", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12 }, "go")).toBe(12);
     expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 13 }, "free")).toBe(13);
+    expect(computeCodexUsageScore({ weeklyPercent: 99, monthlyPercent: 12, shortPercent: 14 }, "go")).toBe(14);
     expect(computeCodexUsageScore({ weeklyPercent: 1 }, "go")).toBe(CODEX_UNKNOWN_USAGE_SCORE);
   });
 
@@ -1271,6 +1274,19 @@ describe("codex routing", () => {
       shortWindowSeconds: 18000,
       weeklyPercent: 0,
       weeklyResetAt: 2000586800,
+    });
+  });
+
+  test("a zero-valued short-only WHAM snapshot remains known quota (#2047)", () => {
+    expect(parseUsageQuota({
+      plan_type: "k12",
+      rate_limit: {
+        primary_window: { used_percent: 0, reset_at: 2000000000, limit_window_seconds: 18000 },
+      },
+    })).toMatchObject({
+      shortPercent: 0,
+      shortResetAt: 2000000000,
+      shortWindowSeconds: 18000,
     });
   });
 
