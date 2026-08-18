@@ -1662,6 +1662,7 @@ describe("Cursor checkpoint request construction", () => {
 describe("Cursor checkpoint idle TTL", () => {
   afterEach(() => {
     clearCursorCheckpointsForTests();
+    resetCursorBlobStateForTests();
   });
 
   test("releases expired checkpoint leases without another request", () => {
@@ -1677,8 +1678,12 @@ describe("Cursor checkpoint idle TTL", () => {
         scheduled = undefined;
       },
     });
+    const requestScope = createCursorBlobRequestScope();
+    const data = new TextEncoder().encode('{"role":"system","content":"ttl-lease"}');
+    const blobId = storeCursorBlob(data, requestScope);
+    sealCursorBlobRequestScope(requestScope);
     const checkpointBytes = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
-      pendingToolCalls: ["ttl"],
+      rootPromptMessagesJson: [blobId],
     }));
     expect(commitCursorCheckpoint({
       conversationId: "cursor_ttl",
@@ -1686,10 +1691,13 @@ describe("Cursor checkpoint idle TTL", () => {
       modelId: "grok-4.6",
       checkpointBytes,
     })).toBeDefined();
+    releaseCursorBlobRequestScope(requestScope);
     expect(cursorCheckpointStoreMetricsForTests().count).toBe(1);
+    expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBeGreaterThan(0);
     expect(scheduled).toBeTypeOf("function");
     now += CURSOR_CHECKPOINT_TTL_MS + 1;
     scheduled?.();
     expect(cursorCheckpointStoreMetricsForTests().count).toBe(0);
+    expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(0);
   });
 });
