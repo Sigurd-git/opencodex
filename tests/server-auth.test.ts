@@ -163,6 +163,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    extraBody?: Record<string, unknown>;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -309,13 +310,14 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      extraBody = {},
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
       },
-      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
+      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream, ...extraBody }),
       signal,
     }),
   };
@@ -2137,6 +2139,33 @@ describe("server local API auth", () => {
       expect(response.status).toBe(200);
       expect((await response.json() as { id: string }).id).toBe("acct-pool-b");
       expect(harness.dispatches).toEqual(["acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: Daybreak keeps its entitlement identity but uses the stable wire model", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let upstreamBody: Record<string, unknown> | undefined;
+    const harness = await startPoolRetryHarness(
+      async (_accountId, request) => {
+        upstreamBody = await request.json() as Record<string, unknown>;
+        return Response.json({ id: "canonical-wire-success", status: "completed", output: [] });
+      },
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({
+        model,
+        extraBody: { prompt_cache_retention: "24h" },
+      });
+      expect(response.status).toBe(200);
+      expect(upstreamBody?.model).toBe("gpt-5.6-sol");
+      expect(upstreamBody).not.toHaveProperty("prompt_cache_retention");
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
     } finally {
       await stopPoolRetryHarness(harness);
     }

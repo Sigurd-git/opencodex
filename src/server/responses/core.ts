@@ -536,6 +536,30 @@ type CodexPoolAccountRetryResult =
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   };
 
+const CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS: ReadonlyMap<string, string> = new Map([
+  // The authenticated catalog currently advertises Daybreak Blue, while successful responses
+  // identify the serving model as gpt-5.6-sol. Sending the selector itself is shard-dependent:
+  // live traffic can receive the exact unsupported-model 400 repeatedly from the same entitled
+  // account. Keep Daybreak as the admission/catalog identity, but use the stable serving id on
+  // the credential-bearing wire after entitlement selection has completed.
+  ["gpt-daybreak-blue-latest", "gpt-5.6-sol"],
+]);
+
+function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest, route: RouteResult): void {
+  if (!isCanonicalOpenAiForwardProvider(route.provider)) return;
+  const wireModel = CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS.get(route.modelId);
+  if (!wireModel) return;
+
+  parsed.modelId = wireModel;
+  if (!parsed._rawBody || typeof parsed._rawBody !== "object") return;
+  const raw = parsed._rawBody as Record<string, unknown>;
+  raw.model = wireModel;
+  // Daybreak's authenticated catalog does not advertise retention support, and the upstream
+  // rejects this optional Codex hint before model execution. Removing it preserves request
+  // semantics while avoiding an otherwise terminal pre-stream 400.
+  delete raw.prompt_cache_retention;
+}
+
 /**
  * Workspace-denial evidence for a 403, read from the upstream body.
  *
@@ -2164,6 +2188,7 @@ async function handleResponsesInner(
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+  applyCodexAccountGatedWireNormalization(parsed, route);
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
