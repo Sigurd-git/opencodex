@@ -545,9 +545,18 @@ const CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS: ReadonlyMap<string, string> = n
   ["gpt-daybreak-blue-latest", "gpt-5.6-sol"],
 ]);
 
+export function codexAccountGatedCanonicalWireModel(modelId: string): string | undefined {
+  const exact = CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS.get(modelId);
+  if (exact) return exact;
+  for (const [selector, wireModel] of CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS) {
+    if (slugsEquivalent(modelId, selector)) return wireModel;
+  }
+  return undefined;
+}
+
 function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest, route: RouteResult): void {
   if (!isCanonicalOpenAiForwardProvider(route.provider)) return;
-  const wireModel = CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS.get(route.modelId);
+  const wireModel = codexAccountGatedCanonicalWireModel(route.modelId);
   if (!wireModel) return;
 
   parsed.modelId = wireModel;

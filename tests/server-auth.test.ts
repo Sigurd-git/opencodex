@@ -2171,6 +2171,52 @@ describe("server local API auth", () => {
     }
   });
 
+  test("#2097: Daybreak compact uses the stable wire model without retention", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let upstreamBody: Record<string, unknown> | undefined;
+    let upstreamUrl = "";
+    const harness = await startPoolRetryHarness(
+      async (_accountId, request) => {
+        upstreamUrl = request.url;
+        upstreamBody = await request.json() as Record<string, unknown>;
+        return new Response([
+          'event: response.output_item.done',
+          'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","encrypted_content":"gAAAAAB-test-opaque"}}',
+          '',
+          'event: response.completed',
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+          '',
+          'data: [DONE]',
+          '',
+        ].join("\n"), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({
+        model,
+        path: "/v1/responses/compact",
+        extraBody: { prompt_cache_retention: "24h" },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        output: [{ type: "compaction", encrypted_content: "gAAAAAB-test-opaque" }],
+      });
+      expect(upstreamUrl).toEndWith("/responses");
+      expect(upstreamBody?.model).toBe("gpt-5.6-sol");
+      expect(upstreamBody?.stream).toBe(true);
+      expect(upstreamBody).not.toHaveProperty("prompt_cache_retention");
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
   test("#2097: a confirmed entitled account survives two transient unsupported-model 400s in place", async () => {
     const model = "gpt-daybreak-blue-latest";
     let attempts = 0;
