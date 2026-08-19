@@ -129,7 +129,9 @@ preserving a stale one would block every later migration.
 - `gpt-daybreak-blue-latest` remains the catalog and entitlement identity, but the canonical
   ChatGPT wire uses `gpt-5.6-sol`, the serving id reported by successful Daybreak responses.
   Daybreak compaction uses the existing synthetic `/responses` compaction path instead of the
-  native `/responses/compact` endpoint, whose model support is selector-specific.
+  native `/responses/compact` endpoint, whose model support is selector-specific. The internal
+  turn stays streaming as required by the canonical ChatGPT backend, and OCX returns the opaque
+  encrypted compaction item without attempting to decrypt or re-encode it.
   The optional `prompt_cache_retention` hint is removed on this route because Daybreak's
   authenticated catalog does not advertise it and upstream rejects it before execution.
 
