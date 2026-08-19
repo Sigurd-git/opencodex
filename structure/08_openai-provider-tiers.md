@@ -115,6 +115,32 @@ preserving a stale one would block every later migration.
   `daybreak-blue-latest` are distinct wire surfaces. An observed native row follows the pinned Sol
   capability metadata, but routing strips only the account selector and keeps
   `gpt-daybreak-blue-latest` byte-for-byte; it never expands the bare list or substitutes Sol.
+- Account-gated native rows use each account's authenticated Codex `/models` roster as the
+  availability authority. Pool selection excludes accounts whose confirmed roster omits the model;
+  selector rows are generated only for the mapped entitled account. The bare row uses any eligible
+  account in Pool mode but only main-account evidence in Direct mode; a Direct turn independently
+  checks the forwarded caller credential, or stored main when an admission bearer is substituted.
+  Discovery failures fail closed. If an
+  entitled account still receives the exact pre-stream unsupported-model 400, opencodex invalidates
+  that account's roster and retries once on the same account only when the refreshed roster still
+  grants the model; otherwise ordinary eligible-account failover applies.
+
+[Decision Log]
+- 목적과 의도: Prevent account-gated native models from being shown or dispatched through a
+  ChatGPT account that upstream does not authorize.
+- 기존 구현 및 제약 조건: A static global Daybreak row solved clean-install discovery for
+  entitled accounts, but Pool accounts can hold different grants and Codex's injected catalog does
+  not refresh itself.
+- 검토한 주요 대안: Infer grants from plan labels, learn only from prompt failures, bind Daybreak
+  permanently to main, or rewrite the wire id to `gpt-5.6-sol`.
+- 선택한 방식: Share bounded authenticated per-account model-roster evidence between catalog sync,
+  `/v1/models`, and Pool auth selection.
+- 다른 대안 대신 이 방식을 선택한 이유: Plan labels and account position do not prove a grant;
+  failure-only learning wastes a turn; permanent main binding rejects valid secondary grants; wire
+  rewriting changes the requested product identity.
+- 장점, 단점 및 영향: Entitled accounts retain clean-install discovery while unentitled accounts
+  never receive the gated dispatch. A cold gated request may pay one bounded roster fetch per
+  account, and an unavailable discovery temporarily hides the model rather than guessing.
 - The two GPT-5.6 surfaces advertise different windows on purpose. API rows use 1,050,000
   context with 922,000 max input. Codex-login rows default to the live catalog 272,000
   (auto-compact 244,800) and only rise to 922,000 / 829,800 when the user turns the 1M

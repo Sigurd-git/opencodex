@@ -368,6 +368,7 @@ export async function handleResponsesCompact(
         authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
           accountId: route.codexAccountId,
           modelId: selectedModelId,
+          substituteMainCredentialForDirect: substituteMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);

@@ -110,6 +110,12 @@ import {
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
+  entitledCodexAccountIdsForModel,
+  invalidateCodexModelEntitlementsForAccount,
+  resolveCodexModelEntitlements,
+} from "../../codex/model-entitlements";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
+import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
@@ -580,22 +586,32 @@ async function retryCodexPoolOnAlternateAccount(
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
     outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
   } = args;
-  // Defense in depth: exact account selectors must never reach alternate-account resolution,
-  // even if a future caller forgets to guard this helper.
-  if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   const inboundWire = options.inboundWire ?? "responses";
   let retryAuthCtx: CodexAuthContext | undefined;
+  if (outcomeStatus === 400 && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)) {
+    invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
+    const refreshed = await resolveCodexModelEntitlements(config);
+    if (entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(firstAuthCtx.accountId)) {
+      // The authenticated roster still grants this exact model. Retry once on the same account:
+      // upstream shards can briefly disagree during a gated-model rollout, but a pre-stream 400
+      // proves no output was committed and keeps this replay bounded.
+      retryAuthCtx = firstAuthCtx;
+    }
+  }
+  // Exact account selectors may retry the same confirmed account above, but must never resolve
+  // an alternate. Quota failures and a refreshed entitlement miss remain terminal.
+  if (!retryAuthCtx && firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   try {
-    retryAuthCtx = await resolveCodexAuthContext(
-      req.headers,
-      config,
-      "pool",
-      {
-        excludeAccountId: firstAuthCtx.accountId,
-        modelId: route.modelId,
-        beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-      },
-    );
+    retryAuthCtx ??= await resolveCodexAuthContext(
+        req.headers,
+        config,
+        "pool",
+        {
+          excludeAccountId: firstAuthCtx.accountId,
+          modelId: route.modelId,
+          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        },
+      );
   } catch (error) {
     if (
       !(error instanceof CodexPoolAuthenticationError)
@@ -1094,6 +1110,7 @@ async function resolveResponsesCodexAuth(
       authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
         accountId: route.codexAccountId,
         modelId: route.modelId,
+        substituteMainCredentialForDirect: substituteMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
       });
       options.onCodexAuthContextResolved?.(authCtx);
@@ -2683,7 +2700,7 @@ async function handleResponsesInner(
       }
     }
 
-    if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
+    if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
       if (await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
@@ -2691,7 +2708,7 @@ async function handleResponsesInner(
         options.abortSignal,
       )) {
         poolRetryOutcome = 400;
-      } else if (shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
+      } else if (!authCtx.fixedAccount && shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
         // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
         poolRetryOutcome = upstreamResponse.status;
       }

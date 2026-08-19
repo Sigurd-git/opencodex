@@ -44,6 +44,7 @@ import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspect
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../src/lib/local-provider-reload-contract";
+import { resetCodexModelEntitlementCacheForTests } from "../src/codex/model-entitlements";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -141,6 +142,7 @@ afterEach(() => {
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
   clearAccountQuota();
+  resetCodexModelEntitlementCacheForTests();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
 
@@ -200,6 +202,7 @@ async function startPoolRetryHarness(
     reauthAccountIds?: string[];
     omitCredentialAccountIds?: string[];
     combos?: OcxConfig["combos"];
+    modelRosterByAccount?: Record<string, string[]>;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -208,6 +211,7 @@ async function startPoolRetryHarness(
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountQuota();
+  resetCodexModelEntitlementCacheForTests();
   clearRequestLogsForTests();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
@@ -223,6 +227,15 @@ async function startPoolRetryHarness(
     port: 0,
     async fetch(request) {
       const accountId = request.headers.get("chatgpt-account-id") ?? "missing";
+      if (new URL(request.url).pathname === "/models") {
+        return Response.json({
+          models: (options.modelRosterByAccount?.[accountId] ?? []).map(slug => ({
+            slug,
+            supported_in_api: true,
+            visibility: "list",
+          })),
+        });
+      }
       dispatches.push(accountId);
       return reply(accountId, request);
     },
@@ -2103,6 +2116,95 @@ describe("server local API auth", () => {
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: account-gated model selection skips an unentitled active Pool account", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const harness = await startPoolRetryHarness(
+      accountId => Response.json({ id: accountId, status: "completed", output: [] }),
+      {
+        modelRosterByAccount: {
+          "acct-pool-a": ["gpt-5.6-sol"],
+          "acct-pool-b": ["gpt-5.6-sol", model],
+        },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("acct-pool-b");
+      expect(harness.dispatches).toEqual(["acct-pool-b"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: a confirmed entitled account retries one transient unsupported-model 400 in place", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let attempts = 0;
+    const harness = await startPoolRetryHarness(
+      () => ++attempts === 1
+        ? rejectionResponse(unsupportedModelBody(model))
+        : Response.json({ id: "same-account-success", status: "completed", output: [] }),
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("same-account-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: an exact account-gated selector may retry only its confirmed account in place", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    let attempts = 0;
+    const harness = await startPoolRetryHarness(
+      () => ++attempts === 1
+        ? rejectionResponse(unsupportedModelBody(model))
+        : Response.json({ id: "same-exact-account-success", status: "completed", output: [] }),
+      {
+        accountMode: "direct",
+        activeAccountId: "pool-b",
+        accountNamespaces: { side: "pool-a" },
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({ model: `side/${model}`, callerBearer: false });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("same-exact-account-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: an account-gated model with no confirmed grant fails before upstream dispatch", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const harness = await startPoolRetryHarness(
+      () => Response.json({ id: "must-not-dispatch" }),
+      {
+        modelRosterByAccount: {
+          "acct-pool-a": ["gpt-5.6-sol"],
+          "acct-pool-b": ["gpt-5.6-sol"],
+        },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(401);
+      expect(await response.text()).toContain("No eligible Codex account supports this model");
+      expect(harness.dispatches).toEqual([]);
     } finally {
       await stopPoolRetryHarness(harness);
     }
