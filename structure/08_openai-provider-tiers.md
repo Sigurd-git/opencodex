@@ -122,8 +122,9 @@ preserving a stale one would block every later migration.
   checks the forwarded caller credential, or stored main when an admission bearer is substituted.
   Discovery failures fail closed. If an
   entitled account still receives the exact pre-stream unsupported-model 400, opencodex invalidates
-  that account's roster and retries once on the same account only when the refreshed roster still
-  grants the model; otherwise ordinary eligible-account failover applies.
+  that account's roster and permits at most seven additional same-account sends, re-confirming the
+  exact rejection and fresh grant before each later send; otherwise ordinary eligible-account
+  failover applies.
 
 [Decision Log]
 - 목적과 의도: Prevent account-gated native models from being shown or dispatched through a

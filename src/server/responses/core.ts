@@ -592,7 +592,7 @@ async function retryCodexPoolOnAlternateAccount(
     invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
     const refreshed = await resolveCodexModelEntitlements(config);
     if (entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(firstAuthCtx.accountId)) {
-      // The authenticated roster still grants this exact model. Retry once on the same account:
+      // The authenticated roster still grants this exact model. Retry on the same account:
       // upstream shards can briefly disagree during a gated-model rollout, but a pre-stream 400
       // proves no output was committed and keeps this replay bounded.
       retryAuthCtx = firstAuthCtx;
@@ -693,27 +693,50 @@ async function retryCodexPoolOnAlternateAccount(
     logCtx.accountLogLabel,
   );
 
-  noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+  const retrySameConfirmedAccount = outcomeStatus === 400
+    && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)
+    && retryAuthCtx.accountId === firstAuthCtx.accountId;
+  // Live Daybreak traffic has produced long runs of unsupported-model 400s from different
+  // upstream shards even while the authenticated roster continues to grant the model. Permit
+  // seven additional same-account sends (eight total including the original), re-checking the
+  // exact allow-listed body and fresh entitlement before every later send. Alternate-account and
+  // quota recovery retain their historical one-send bound.
+  const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
+  let retrySendCount = 0;
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetchWithHeaderTimeout(
-      request.url,
-      {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      },
-      upstream.signal,
-      connectMs,
-      stream,
-      providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-        providerName: route.providerName,
-        modelId: route.modelId,
-      }),
-      // Credential-bearing forward send: never follow a redirect into a
-      // dead-host rejection after the credential was seen (#914).
-      route.provider.authMode === "forward",
-    );
+    while (true) {
+      noteAttemptSend(logCtx.activeAttempt, passthroughEstimate);
+      upstreamResponse = await fetchWithHeaderTimeout(
+        request.url,
+        {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        },
+        upstream.signal,
+        connectMs,
+        stream,
+        providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+          providerName: route.providerName,
+          modelId: route.modelId,
+        }),
+        // Credential-bearing forward send: never follow a redirect into a
+        // dead-host rejection after the credential was seen (#914).
+        route.provider.authMode === "forward",
+      );
+      retrySendCount += 1;
+      if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
+      if (!await shouldRetryCodexPoolAccountModel400(
+        upstreamResponse,
+        route.modelId,
+        options.abortSignal,
+      )) break;
+      invalidateCodexModelEntitlementsForAccount(retryAuthCtx.accountId);
+      const refreshed = await resolveCodexModelEntitlements(config);
+      if (!entitledCodexAccountIdsForModel(refreshed, route.modelId)?.has(retryAuthCtx.accountId)) break;
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+    }
   } catch (error) {
     // Attribute the transport failure to the alternate account (already selected).
     return { kind: "transport", error, authCtx: retryAuthCtx };

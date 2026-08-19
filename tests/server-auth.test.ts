@@ -2142,11 +2142,11 @@ describe("server local API auth", () => {
     }
   });
 
-  test("#2097: a confirmed entitled account retries one transient unsupported-model 400 in place", async () => {
+  test("#2097: a confirmed entitled account survives two transient unsupported-model 400s in place", async () => {
     const model = "gpt-daybreak-blue-latest";
     let attempts = 0;
     const harness = await startPoolRetryHarness(
-      () => ++attempts === 1
+      () => ++attempts <= 2
         ? rejectionResponse(unsupportedModelBody(model))
         : Response.json({ id: "same-account-success", status: "completed", output: [] }),
       {
@@ -2158,7 +2158,7 @@ describe("server local API auth", () => {
       const response = await harness.request({ model });
       expect(response.status).toBe(200);
       expect((await response.json() as { id: string }).id).toBe("same-account-success");
-      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a", "acct-pool-a"]);
     } finally {
       await stopPoolRetryHarness(harness);
     }
@@ -2168,7 +2168,7 @@ describe("server local API auth", () => {
     const model = "gpt-daybreak-blue-latest";
     let attempts = 0;
     const harness = await startPoolRetryHarness(
-      () => ++attempts === 1
+      () => ++attempts <= 2
         ? rejectionResponse(unsupportedModelBody(model))
         : Response.json({ id: "same-exact-account-success", status: "completed", output: [] }),
       {
@@ -2182,8 +2182,28 @@ describe("server local API auth", () => {
       const response = await harness.request({ model: `side/${model}`, callerBearer: false });
       expect(response.status).toBe(200);
       expect((await response.json() as { id: string }).id).toBe("same-exact-account-success");
-      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a"]);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-a", "acct-pool-a"]);
       expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("#2097: repeated gated-model rejection remains bounded at eight total sends", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const body = unsupportedModelBody(model);
+    const harness = await startPoolRetryHarness(
+      () => rejectionResponse(body),
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(Array(8).fill("acct-pool-a"));
     } finally {
       await stopPoolRetryHarness(harness);
     }
