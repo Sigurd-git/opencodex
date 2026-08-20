@@ -358,7 +358,7 @@ behaviors.
   duplicate call.
 - 다른 대안 대신 이 방식을 선택한 이유: it covers every supported service entrypoint without
   adding home-directory side effects to server-library consumers or creating a second roster format.
-- 장점, 단점 및 영향: stale owned definitions converge on every daemon start, disabled integration
+- 장점, 단점 및 영향: stale OpenCodex-owned definitions converge on every daemon start, disabled integration
   prunes them without provider discovery, and catalog failure falls back to unmarked definitions so
   startup remains available. A later dashboard save or `ocx claude` launch restores missing context
   markers after a transient failure.
