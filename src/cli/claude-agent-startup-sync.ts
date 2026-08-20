@@ -1,11 +1,39 @@
 import type { OcxConfig } from "../types";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { fetchClaudeContextWindows } from "./claude";
+import type { ReadinessGate } from "../server/readiness";
 
 export interface ClaudeAgentStartupSyncDeps {
   fetchContextWindows?: typeof fetchClaudeContextWindows;
   injectAgentDefs?: typeof injectClaudeAgentDefs;
   warn?: (message: string) => void;
+}
+
+/**
+ * Keep the public readiness gate pending until both startup reconciliations have settled.
+ *
+ * The Codex sync remains the authority for ready versus failed. Claude roster repair is
+ * deliberately best-effort (#2200), but readiness must not become observable between the
+ * Codex write and that repair: a service manager could otherwise launch Claude Code against
+ * stale `ocx-*.md` files. A small forwarding gate delays only the successful transition;
+ * terminal Codex failure is still published immediately.
+ */
+export async function reconcileClientStartupBeforeReady<T>(
+  readinessGate: ReadinessGate,
+  syncCodex: (deferredGate: ReadinessGate) => Promise<T>,
+  syncClaudeRoster: () => Promise<unknown>,
+): Promise<T> {
+  let codexReady = false;
+  const deferredGate: ReadinessGate = {
+    getStatus: () => readinessGate.getStatus(),
+    markReady: () => { codexReady = true; },
+    markFailed: () => readinessGate.markFailed(),
+  };
+
+  const result = await syncCodex(deferredGate);
+  await syncClaudeRoster();
+  if (codexReady) readinessGate.markReady();
+  return result;
 }
 
 /**

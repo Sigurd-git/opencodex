@@ -79,7 +79,9 @@ instead. Codex's own `models_cache.json` is a different cache, invalidated by ca
 ## Startup readiness
 
 Each `startServer` invocation owns a private, one-shot readiness gate created before the listener
-binds. `handleStart` supplies its gate and transitions it after the shared catalog sync settles.
+binds. `handleStart` supplies its gate and transitions it only after the shared catalog sync and
+best-effort Claude Code roster reconciliation have both settled. The catalog sync remains the
+authority for ready versus failed; a roster warning does not make an otherwise healthy proxy fail.
 Calls without a supplied gate receive a fresh private gate that intentionally remains pending. Only
 `ok: true` with no nonempty warning becomes ready; `null`, a throw, `ok !== true`, or a nonempty
 warning becomes failed. State is isolated per server instance.

@@ -1,18 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { syncClaudeAgentDefsAtProxyStartup } from "../src/cli/claude-agent-startup-sync";
+import { tmpdir } from "node:os";
+import {
+  reconcileClientStartupBeforeReady,
+  syncClaudeAgentDefsAtProxyStartup,
+} from "../src/cli/claude-agent-startup-sync";
+import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
+import { createReadinessGate } from "../src/server/readiness";
 import type { OcxConfig } from "../src/types";
-
-const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
-
-function sourceSlice(start: string, end: string): string {
-  const from = cliSource.indexOf(start);
-  const to = cliSource.indexOf(end, from);
-  expect(from).toBeGreaterThan(-1);
-  expect(to).toBeGreaterThan(from);
-  return cliSource.slice(from, to);
-}
 
 const config = (claudeCode: OcxConfig["claudeCode"] = {}): OcxConfig => ({
   providers: [],
@@ -20,23 +16,25 @@ const config = (claudeCode: OcxConfig["claudeCode"] = {}): OcxConfig => ({
 } as OcxConfig);
 
 describe("Claude agent roster proxy-start synchronization (#2200)", () => {
-  test("foreground startup injects Codex before potentially slow roster discovery", () => {
-    const start = sourceSlice("async function handleStart(", "async function handleEnsure(");
-    expect(start.indexOf("await syncCodexOnStartIfEnabled(")).toBeLessThan(
-      start.indexOf("await syncClaudeAgentDefsAtProxyStartup("),
+  test("keeps readiness pending until the best-effort roster fence settles", async () => {
+    const gate = createReadinessGate();
+    let releaseRoster!: () => void;
+    const rosterPending = new Promise<void>(resolve => { releaseRoster = resolve; });
+
+    const startup = reconcileClientStartupBeforeReady(
+      gate,
+      async deferredGate => {
+        deferredGate.markReady();
+        return { ran: true };
+      },
+      () => rosterPending,
     );
-  });
 
-  test("a newly spawned ensure awaits roster reconciliation before reporting success", () => {
-    const ensure = sourceSlice("async function handleEnsure(", "async function handleTrayProxyStart(");
-    const spawned = ensure.slice(ensure.indexOf("const pinPort"));
-    const healthyAt = spawned.indexOf("await waitForProxy()");
-    const rosterAt = spawned.indexOf("await syncClaudeAgentDefsAtProxyStartup(config, port)");
-    const successAt = spawned.indexOf("console.log(`✅ Proxy running on port ${port}`)");
-
-    expect(healthyAt).toBeGreaterThan(-1);
-    expect(rosterAt).toBeGreaterThan(healthyAt);
-    expect(successAt).toBeGreaterThan(rosterAt);
+    await Promise.resolve();
+    expect(gate.getStatus()).toBe("pending");
+    releaseRoster();
+    expect(await startup).toEqual({ ran: true });
+    expect(gate.getStatus()).toBe("ready");
   });
 
   test("uses the live proxy context-window map for an enabled roster", async () => {
@@ -78,18 +76,29 @@ describe("Claude agent roster proxy-start synchronization (#2200)", () => {
     expect(injected).toEqual({});
   });
 
-  test("catalog failure falls back to an unmarked best-effort roster", async () => {
-    let injected: Record<string, number> | undefined;
-    const result = await syncClaudeAgentDefsAtProxyStartup(config(), 10100, {
-      fetchContextWindows: async () => { throw new Error("catalog unavailable"); },
-      injectAgentDefs: (_cfg, windows) => {
-        injected = windows;
-        return ["ocx-self.md"];
-      },
-    });
+  test("catalog failure still runs the real injector with an unmarked roster", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-startup-roster-"));
+    try {
+      const configured = {
+        providers: [],
+        subagentModels: ["gpt-5.6-sol"],
+        claudeCode: { model: "gpt-5.6-sol" },
+      } as OcxConfig;
+      const result = await syncClaudeAgentDefsAtProxyStartup(configured, 10100, {
+        fetchContextWindows: async () => { throw new Error("catalog unavailable"); },
+        injectAgentDefs: (cfg, windows) => injectClaudeAgentDefs(cfg, windows, dir),
+      });
 
-    expect(result).toEqual(["ocx-self.md"]);
-    expect(injected).toEqual({});
+      expect(result?.sort()).toEqual(["ocx-gpt-5-6-sol.md", "ocx-self.md"]);
+      expect(readdirSync(join(dir, "agents")).sort()).toEqual(result?.sort());
+      for (const file of result ?? []) {
+        const body = readFileSync(join(dir, "agents", file), "utf8");
+        expect(body).toContain("generated-by: opencodex");
+        expect(body).not.toContain("[1m]");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("write failures are warned and never fail proxy startup", async () => {

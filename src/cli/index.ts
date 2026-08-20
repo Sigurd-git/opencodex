@@ -55,7 +55,10 @@ import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
-import { syncClaudeAgentDefsAtProxyStartup } from "./claude-agent-startup-sync";
+import {
+  reconcileClientStartupBeforeReady,
+  syncClaudeAgentDefsAtProxyStartup,
+} from "./claude-agent-startup-sync";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -383,19 +386,18 @@ async function handleStart(options: { block?: boolean } = {}) {
   // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
   reportShellHookFailure(reconcileShellHook(systemEnv.injected));
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
-  // Post-startup sync drives the readiness gate AND the #1046 stale app-server
-  // warning. `syncCodexOnStartIfEnabled` respects the Codex integration toggle
-  // (OFF → no sync) and reports whether anything was written; the readiness gate
-  // observes the real sync outcome (ok/warning) so /readyz never advertises a
-  // half-synced proxy as ready while /healthz stays live.
-  const startupSync = await syncCodexOnStartIfEnabled(port, config, undefined, readinessGate);
+  // Codex sync owns the ready/failed verdict, but its successful transition is
+  // deferred until the best-effort Claude roster reconciliation settles. This
+  // keeps /readyz closed across both startup writes without making an optional
+  // Claude integration failure prevent the proxy from starting.
+  const startupSync = await reconcileClientStartupBeforeReady(
+    readinessGate,
+    gate => syncCodexOnStartIfEnabled(port, config, undefined, gate),
+    () => systemEnv.injected
+      ? Promise.resolve(null)
+      : syncClaudeAgentDefsAtProxyStartup(config, port),
+  );
   if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
-  // `injectSystemEnv` owns this sync only on macOS with systemEnv enabled. Run every other
-  // foreground/service roster reconcile AFTER native Codex startup sync: /healthz is already
-  // live at this point, and putting a catalog fetch before injection created a measurable window
-  // where healthy callers still observed the untouched native config. `ocx ensure` separately
-  // awaits this same idempotent fence before returning from a newly spawned proxy.
-  if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, port);
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
   // final here — and neither write site warns on its own, or a boot that hits
