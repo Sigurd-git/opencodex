@@ -13,6 +13,7 @@
  */
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { listOpenAiForwardSidecarCandidates } from "../providers/openai-sidecar";
+import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { isCodexAccountUsable } from "../codex/account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "../codex/account-id";
 import { getAccountSet } from "../oauth/store";
@@ -83,7 +84,7 @@ export function resolveSidecarAuth(config: OcxConfig): SidecarAuthState {
 /** The auth-entitled fixed candidates. Emitted regardless of picker visibility. */
 export function sidecarAuthSlots(auth: SidecarAuthState): SidecarAuthSlot[] {
   const slots: SidecarAuthSlot[] = [];
-  if (auth.isCodexAuth) slots.push({ provider: "openai", id: AUTH_SLOT_MODELS.codex, slot: "codex" });
+  if (auth.isCodexAuth) slots.push({ provider: OPENAI_CODEX_PROVIDER_ID, id: AUTH_SLOT_MODELS.codex, slot: "codex" });
   if (auth.isAnthropicAuth && auth.anthropicProviderName) {
     slots.push({ provider: auth.anthropicProviderName, id: AUTH_SLOT_MODELS.anthropic, slot: "anthropic" });
   }
