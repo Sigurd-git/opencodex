@@ -258,6 +258,39 @@ describe("request log metadata", () => {
     expect(captured2[0]).not.toHaveProperty("firstOutputMs");
   });
 
+  test("persists the shadow helper source marker to usage.jsonl", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-shadow-usage-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const rawSecret = `sk-proj-${"x".repeat(96)}`;
+    const unsafeMarker = `gpt-5.6-luna\r\nBearer ${rawSecret}\u0007 ${"tail".repeat(32)}`;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      addFinalRequestLog("ocx-shadow-marker", 1, {
+        model: "grok-4.5",
+        provider: "xai",
+        requestedModel: "gpt-5.6-luna",
+        shadowCallRewrittenFrom: unsafeMarker,
+      }, 200);
+
+      const [persisted] = readUsageEntries();
+      const persistedMarker = persisted?.shadowCallRewrittenFrom;
+      const inMemoryMarker = getRequestLogEntries()[0]?.shadowCallRewrittenFrom;
+      expect(persistedMarker).toBe(inMemoryMarker);
+      expect(persistedMarker).toBeDefined();
+      expect(persistedMarker!.length).toBeLessThanOrEqual(64);
+      expect(persistedMarker).not.toContain(rawSecret);
+      expect(persistedMarker).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+    } finally {
+      clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
     const a = beginRequestAttempt(1, "provisional-a", "model-a", "openai-chat");
     noteAttemptSend(a, 100);
@@ -1312,6 +1345,7 @@ describe("request log restart hydrate", () => {
       provider: "chatgpt-pabcdef",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
+      shadowCallRewrittenFrom: "gpt-5.6-luna",
       requestedEffort: "high",
       effectiveEffort: "high",
       reasoningWireField: "reasoning_effort",
@@ -1334,6 +1368,7 @@ describe("request log restart hydrate", () => {
       provider: "chatgpt-pabcdef",
       model: "gpt-5.6-sol",
       requestedModel: "gpt-5.6-sol",
+      shadowCallRewrittenFrom: "gpt-5.6-luna",
       requestedEffort: "high",
       effectiveEffort: "high",
       reasoningWireField: "reasoning_effort",
@@ -1381,6 +1416,7 @@ describe("request log restart hydrate", () => {
         terminalStatus: "failed",
         closeReason: "terminal",
         upstreamError: "Provider unreachable",
+        shadowCallRewrittenFrom: "gpt-5.6-luna",
       },
     ];
 
@@ -1392,6 +1428,7 @@ describe("request log restart hydrate", () => {
       errorCode: "upstream_server_error",
       upstreamError: "Provider unreachable",
       requestedEffort: "xhigh",
+      shadowCallRewrittenFrom: "gpt-5.6-luna",
     });
 
     // Idempotent: a second start in the same process must not duplicate.
