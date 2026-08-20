@@ -125,8 +125,8 @@ of the HTTP retry loop.
   frame, and a buffered response that carries no candidate at all returns
   `google response contained no candidates`. A root `data: null` keepalive frame is still skipped as
   padding.
-- Tool-call batches are closed by one immediately adjacent user turn containing exactly one ordered
-  `functionResponse` per call. Interrupted histories receive an explicit missing-result marker;
+- Tool-call batches are closed by one immediately adjacent user turn containing one ordered
+  `functionResponse` per representable call. Interrupted histories receive an explicit missing-result marker;
   duplicate or standalone results are preserved as marked text (and image siblings) rather than
   emitted as invalid unpaired `functionResponse` parts.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
