@@ -29,7 +29,9 @@ MiniMax Code follows `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, before falling
 back to `~/.minimax`. Its managed block owns only `custom_provider.opencodex`.
 It does not change `defaultModel`, the selected MiniMax credential source, or
 the user's MiniMax login. Choose a `custom_provider:opencodex/<provider/model>`
-entry in MCode after connecting it.
+entry in MCode after connecting it. Refreshing the integration also refreshes
+authoritative per-model context windows and reasoning-effort choices; unknown
+capabilities are omitted, and MCode's session-owned current effort is preserved.
 
 Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
 `~/.prime/agent`; a relative value is refused so the proxy and the agent cannot
