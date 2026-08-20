@@ -55,6 +55,7 @@ import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
+import { syncClaudeAgentDefsAtProxyStartup } from "./claude-agent-startup-sync";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -381,6 +382,11 @@ async function handleStart(options: { block?: boolean } = {}) {
   // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
   // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
   reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+  // `injectSystemEnv` owns this sync only on macOS with systemEnv enabled. Every other
+  // foreground/service start still has to converge the generated roster before another
+  // Claude process reads it. Keep the owning CLI boundary: `startServer` is also a library
+  // primitive and must not mutate ~/.claude from tests or embedders.
+  if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, port);
 
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Post-startup sync drives the readiness gate AND the #1046 stale app-server
@@ -469,6 +475,7 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
       // Ensure env file exists for already-running proxy (may have been deleted or pre-dates this feature).
       const systemEnv = await injectSystemEnv(live.port, config).catch(() => ({ injected: false }));
       reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+      if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, live.port);
       // Refresh the Grok Build fence too (same contract as start). live.hostname is the
       // hostname the running proxy actually bound — config.hostname may have drifted.
       try {
