@@ -115,6 +115,7 @@ import {
   resolveCodexModelEntitlements,
 } from "../../codex/model-entitlements";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
+import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
@@ -2882,6 +2883,20 @@ async function handleResponsesInner(
       } catch (err) {
         return transportFailureResponse(err);
       }
+    }
+
+    if (isCanonicalOpenAiForwardProvider(route.provider)) {
+      captureCodexAffinityDiagnostic({
+        inboundHeaders: req.headers,
+        outboundHeaders: request.headers,
+        authKind: authCtx.kind,
+        accountMode: route.codexAccountMode,
+        fixedAccount: isFixedCodexAccount(authCtx),
+        credentialSubstituted: authCtx.kind === "pool" || authCtx.kind === "main-pool",
+        accountGatedModel: ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId),
+        wireModelNormalized: parsed.modelId !== route.modelId,
+        status: upstreamResponse.status,
+      });
     }
 
     if (usesCodexForwardPoolAuth(authCtx, route.provider)) {

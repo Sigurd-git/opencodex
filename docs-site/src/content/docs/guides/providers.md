@@ -189,6 +189,14 @@ headers — see [Adapters](/reference/adapters/)). Pool mode overwrites only aut
 client identity (for example `originator`, session, or thread headers) when the caller did not send
 them.
 
+For account-switch compatibility diagnosis, enabling provider debug (`ocx debug provider on`) adds
+one `[ocx:codex:affinity]` line per canonical ChatGPT forward response. The line contains header
+presence, coarse size buckets, and process-local HMAC equality tags only. It never includes raw
+credentials, account ids, attestation values, thread/session ids, turn metadata, or request bodies;
+the tags intentionally change after every proxy restart. Use `ocx debug provider logs -f` while
+reproducing the two requests, then run `ocx debug provider off`. This capture is observation-only and
+does not strip metadata, retry a request, switch accounts, or reset a thread.
+
 **Diagnostics and reauth.** Human `ocx status` prints an OAuth health block (redacted account ids,
 no tokens). `ocx doctor` adds an OAuth reliability section with writable-store / single-flight checks
 and WARN rows that include a recovery Action. When an OAuth provider account needs reauthentication, run
