@@ -196,7 +196,7 @@ turn fields, and a count of unknown turn fields. It never includes raw credentia
 attestation values, thread/session ids, turn metadata, or request bodies; the tags intentionally
 change after every proxy restart. Use `ocx debug provider logs -f` while
 reproducing the two requests, then run `ocx debug provider off`. This capture is observation-only and
-does not strip metadata, retry a request, switch accounts, or reset a thread.
+does not strip metadata, retry a request, switch accounts, reset a thread, or otherwise affect routing.
 
 **Diagnostics and reauth.** Human `ocx status` prints an OAuth health block (redacted account ids,
 no tokens). `ocx doctor` adds an OAuth reliability section with writable-store / single-flight checks
