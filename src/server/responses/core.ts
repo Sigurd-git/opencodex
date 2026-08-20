@@ -522,6 +522,11 @@ interface CodexPoolAccountRetryArgs {
   connectMs: number;
   passthroughEstimate?: number;
   stream: boolean;
+  onResponse?: (
+    response: Response,
+    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>,
+    request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>>,
+  ) => void;
 }
 
 type CodexPoolAccountRetryResult =
@@ -762,6 +767,7 @@ async function retryCodexPoolOnAlternateAccount(
         route.provider.authMode === "forward",
       );
       retrySendCount += 1;
+      args.onResponse?.(upstreamResponse, retryAuthCtx, request);
       if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
       if (!await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
@@ -1142,7 +1148,7 @@ function unreadableEncryptedAgentTaskResponse(): Response {
 }
 
 type ResponsesAuthResolution =
-  | { ok: true; authCtx: CodexAuthContext; headers: Headers }
+  | { ok: true; authCtx: CodexAuthContext; headers: Headers; substituteMainCredential: boolean }
   | { ok: false; response: Response };
 
 /**
@@ -1206,6 +1212,7 @@ async function resolveResponsesCodexAuth(
       ok: true,
       authCtx,
       headers: materializeCodexUpstreamAuth(req.headers, authCtx, { substituteMainCredential }),
+      substituteMainCredential,
     };
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
@@ -2218,11 +2225,13 @@ async function handleResponsesInner(
     pendingHostAdmissionLease = admission.lease;
   }
 
+  let substituteMainCredential = false;
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
     if (!finalAuth.ok) return finalAuth.response;
     authCtx = finalAuth.authCtx;
     selectedForwardHeaders = finalAuth.headers;
+    substituteMainCredential = finalAuth.substituteMainCredential;
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
@@ -2885,19 +2894,28 @@ async function handleResponsesInner(
       }
     }
 
-    if (isCanonicalOpenAiForwardProvider(route.provider)) {
+    const captureAffinityResponse = (
+      response: Response,
+      captureAuthCtx: CodexAuthContext = authCtx,
+      captureRequest: Awaited<ReturnType<typeof adapter.buildRequest>> = request,
+      credentialSubstituted = substituteMainCredential
+        || captureAuthCtx.kind === "pool"
+        || captureAuthCtx.kind === "main-pool",
+    ): void => {
+      if (!isCanonicalOpenAiForwardProvider(route.provider)) return;
       captureCodexAffinityDiagnostic({
         inboundHeaders: req.headers,
-        outboundHeaders: request.headers,
-        authKind: authCtx.kind,
+        outboundHeaders: captureRequest.headers,
+        authKind: captureAuthCtx.kind,
         accountMode: route.codexAccountMode,
-        fixedAccount: isFixedCodexAccount(authCtx),
-        credentialSubstituted: authCtx.kind === "pool" || authCtx.kind === "main-pool",
+        fixedAccount: isFixedCodexAccount(captureAuthCtx),
+        credentialSubstituted,
         accountGatedModel: ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId),
         wireModelNormalized: parsed.modelId !== route.modelId,
-        status: upstreamResponse.status,
+        status: response.status,
       });
-    }
+    };
+    captureAffinityResponse(upstreamResponse);
 
     if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
@@ -2927,6 +2945,9 @@ async function handleResponsesInner(
           connectMs,
           passthroughEstimate,
           stream: parsed.stream,
+          onResponse: (response, retryAuthCtx, retryRequest) => {
+            captureAffinityResponse(response, retryAuthCtx, retryRequest, true);
+          },
         });
         if (retry.kind === "transport") {
           authCtx = retry.authCtx;

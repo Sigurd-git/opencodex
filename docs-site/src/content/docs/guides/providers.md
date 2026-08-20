@@ -191,9 +191,10 @@ them.
 
 For account-switch compatibility diagnosis, enabling provider debug (`ocx debug provider on`) adds
 one `[ocx:codex:affinity]` line per canonical ChatGPT forward response. The line contains header
-presence, coarse size buckets, and process-local HMAC equality tags only. It never includes raw
-credentials, account ids, attestation values, thread/session ids, turn metadata, or request bodies;
-the tags intentionally change after every proxy restart. Use `ocx debug provider logs -f` while
+presence, coarse size buckets, process-local HMAC equality tags, safe summaries of known top-level
+turn fields, and a count of unknown turn fields. It never includes raw credentials, account ids,
+attestation values, thread/session ids, turn metadata, or request bodies; the tags intentionally
+change after every proxy restart. Use `ocx debug provider logs -f` while
 reproducing the two requests, then run `ocx debug provider off`. This capture is observation-only and
 does not strip metadata, retry a request, switch accounts, or reset a thread.
 
