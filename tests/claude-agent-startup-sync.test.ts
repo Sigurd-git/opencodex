@@ -1,6 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { syncClaudeAgentDefsAtProxyStartup } from "../src/cli/claude-agent-startup-sync";
 import type { OcxConfig } from "../src/types";
+
+const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+
+function sourceSlice(start: string, end: string): string {
+  const from = cliSource.indexOf(start);
+  const to = cliSource.indexOf(end, from);
+  expect(from).toBeGreaterThan(-1);
+  expect(to).toBeGreaterThan(from);
+  return cliSource.slice(from, to);
+}
 
 const config = (claudeCode: OcxConfig["claudeCode"] = {}): OcxConfig => ({
   providers: [],
@@ -8,6 +20,25 @@ const config = (claudeCode: OcxConfig["claudeCode"] = {}): OcxConfig => ({
 } as OcxConfig);
 
 describe("Claude agent roster proxy-start synchronization (#2200)", () => {
+  test("foreground startup injects Codex before potentially slow roster discovery", () => {
+    const start = sourceSlice("async function handleStart(", "async function handleEnsure(");
+    expect(start.indexOf("await syncCodexOnStartIfEnabled(")).toBeLessThan(
+      start.indexOf("await syncClaudeAgentDefsAtProxyStartup("),
+    );
+  });
+
+  test("a newly spawned ensure awaits roster reconciliation before reporting success", () => {
+    const ensure = sourceSlice("async function handleEnsure(", "async function handleTrayProxyStart(");
+    const spawned = ensure.slice(ensure.indexOf("const pinPort"));
+    const healthyAt = spawned.indexOf("await waitForProxy()");
+    const rosterAt = spawned.indexOf("await syncClaudeAgentDefsAtProxyStartup(config, port)");
+    const successAt = spawned.indexOf("console.log(`✅ Proxy running on port ${port}`)");
+
+    expect(healthyAt).toBeGreaterThan(-1);
+    expect(rosterAt).toBeGreaterThan(healthyAt);
+    expect(successAt).toBeGreaterThan(rosterAt);
+  });
+
   test("uses the live proxy context-window map for an enabled roster", async () => {
     const calls: Array<{ port: number; windows?: Record<string, number> }> = [];
     const result = await syncClaudeAgentDefsAtProxyStartup(config(), 10100, {

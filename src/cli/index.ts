@@ -382,12 +382,6 @@ async function handleStart(options: { block?: boolean } = {}) {
   // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
   // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
   reportShellHookFailure(reconcileShellHook(systemEnv.injected));
-  // `injectSystemEnv` owns this sync only on macOS with systemEnv enabled. Every other
-  // foreground/service start still has to converge the generated roster before another
-  // Claude process reads it. Keep the owning CLI boundary: `startServer` is also a library
-  // primitive and must not mutate ~/.claude from tests or embedders.
-  if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, port);
-
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Post-startup sync drives the readiness gate AND the #1046 stale app-server
   // warning. `syncCodexOnStartIfEnabled` respects the Codex integration toggle
@@ -396,6 +390,12 @@ async function handleStart(options: { block?: boolean } = {}) {
   // half-synced proxy as ready while /healthz stays live.
   const startupSync = await syncCodexOnStartIfEnabled(port, config, undefined, readinessGate);
   if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
+  // `injectSystemEnv` owns this sync only on macOS with systemEnv enabled. Run every other
+  // foreground/service roster reconcile AFTER native Codex startup sync: /healthz is already
+  // live at this point, and putting a catalog fetch before injection created a measurable window
+  // where healthy callers still observed the untouched native config. `ocx ensure` separately
+  // awaits this same idempotent fence before returning from a newly spawned proxy.
+  if (!systemEnv.injected) await syncClaudeAgentDefsAtProxyStartup(config, port);
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
   // final here — and neither write site warns on its own, or a boot that hits
@@ -519,6 +519,10 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     return null;
   });
   if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+  // The child opens /healthz before its best-effort roster reconcile. Await the same idempotent
+  // operation in the parent so `ocx ensure` cannot report success while stale ocx-*.md files are
+  // still observable. Always use the live port, including fallback-port starts.
+  await syncClaudeAgentDefsAtProxyStartup(config, port);
   console.log(`✅ Proxy running on port ${port}`);
   return true;
 }
