@@ -101,9 +101,11 @@ Run immediately before EACH delete batch; abort the batch on any intersection:
    Protect both the dirty path and its attached branch (detached dirty worktrees
    protect the path itself).
 2. `gh pr list --state open --json headRefName` — collect every open-PR head.
-3. Protected = {dev, main, preview} ∪ open-PR heads ∪ checked-out ∪ dirty-worktree
-   branches. `comm -12` the sorted candidate list against sorted Protected; any
-   overlap aborts the whole batch, not just the row.
+3. Protected = {dev, main, preview} ∪ open-PR heads ∪ checked-out branches ∪
+   dirty-worktree branches ∪ dirty-worktree PATHS (a detached dirty worktree has
+   no branch — its path itself is the protected row). `comm -12` the sorted
+   candidate list against sorted Protected; any overlap aborts the whole batch,
+   not just the row.
 4. For unmerged candidates, re-prove 0 unique patches with `git cherry dev <ref>`
    at execution time; a snapshot proof is stale the moment the tree moves.
 5. Detached commits require a durable preservation ref (branch or tag) verified with
