@@ -258,7 +258,7 @@ export function setRootOpenaiBaseUrl(
   hostname?: string,
 ): { content: string; keptUserBaseUrl: boolean } {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   const key = buildOpenaiBaseUrlLine(port, hostname);
 
@@ -295,7 +295,7 @@ export function setRootOpenaiBaseUrl(
  */
 export function stripInjectedOpenaiBaseUrl(content: string): string {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   const drop = new Set<number>();
   for (let i = 0; i < rootEnd; i++) {
@@ -419,7 +419,7 @@ export function getCodexRoutingKind(): CodexRoutingKind {
  */
 function stripExistingModelProvider(content: string): string {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   const out: string[] = [];
   lines.forEach((line, i) => {
     if (/^\s*model_provider\s*=/.test(line)) {
@@ -440,7 +440,7 @@ function stripExistingModelProvider(content: string): string {
  */
 export function stripRootContextWindowOverrides(content: string): string {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   return lines
     .filter((line, i) => {
       const isRoot = firstTable === -1 || i < firstTable;
@@ -451,7 +451,7 @@ export function stripRootContextWindowOverrides(content: string): string {
 
 function stripRootRoutedModel(content: string): string {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   return lines
     .filter((line, i) => {
       const isRoot = firstTable === -1 || i < firstTable;
@@ -470,7 +470,7 @@ function stripRootRoutedModel(content: string): string {
  */
 function setRootModelProvider(content: string): string {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   const key = 'model_provider = "opencodex"';
   if (firstTable === -1) {
     return content.replace(/\n+$/, "") + "\n" + key + "\n";
@@ -481,9 +481,96 @@ function setRootModelProvider(content: string): string {
   return lines.join("\n");
 }
 
+type RootTomlScanState = {
+  multiline: "basic" | "literal" | null;
+  squareDepth: number;
+  curlyDepth: number;
+};
+
+function scanRootTomlLine(line: string, state: RootTomlScanState): void {
+  let single: "basic" | "literal" | null = null;
+  for (let index = 0; index < line.length;) {
+    if (state.multiline === "basic") {
+      if (line.startsWith('"""', index)) {
+        state.multiline = null;
+        index += 3;
+      } else if (line[index] === "\\") {
+        index += 2;
+      } else index += 1;
+      continue;
+    }
+    if (state.multiline === "literal") {
+      if (line.startsWith("'''", index)) {
+        state.multiline = null;
+        index += 3;
+      } else index += 1;
+      continue;
+    }
+    if (single === "basic") {
+      if (line[index] === "\\") index += 2;
+      else if (line[index] === '"') {
+        single = null;
+        index += 1;
+      } else index += 1;
+      continue;
+    }
+    if (single === "literal") {
+      if (line[index] === "'") single = null;
+      index += 1;
+      continue;
+    }
+
+    if (line[index] === "#") break;
+    if (line.startsWith('"""', index)) {
+      state.multiline = "basic";
+      index += 3;
+    } else if (line.startsWith("'''", index)) {
+      state.multiline = "literal";
+      index += 3;
+    } else if (line[index] === '"') {
+      single = "basic";
+      index += 1;
+    } else if (line[index] === "'") {
+      single = "literal";
+      index += 1;
+    } else if (line[index] === "[") {
+      state.squareDepth += 1;
+      index += 1;
+    } else if (line[index] === "]") {
+      state.squareDepth = Math.max(0, state.squareDepth - 1);
+      index += 1;
+    } else if (line[index] === "{") {
+      state.curlyDepth += 1;
+      index += 1;
+    } else if (line[index] === "}") {
+      state.curlyDepth = Math.max(0, state.curlyDepth - 1);
+      index += 1;
+    } else index += 1;
+  }
+}
+
+/** Find the first table header without mistaking array or string contents for syntax. */
+function findFirstRootTableIndex(lines: readonly string[]): number {
+  const state: RootTomlScanState = {
+    multiline: null,
+    squareDepth: 0,
+    curlyDepth: 0,
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const structural =
+      state.multiline === null &&
+      state.squareDepth === 0 &&
+      state.curlyDepth === 0;
+    if (structural && /^\s*\[{1,2}/.test(line)) return index;
+    scanRootTomlLine(line, state);
+  }
+  return -1;
+}
+
 function readRootModelCatalogPath(content: string): string | null {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const firstTable = findFirstRootTableIndex(lines);
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
   let ownedCatalogPath: string | null = null;
@@ -499,7 +586,7 @@ function readRootModelCatalogPath(content: string): string | null {
 
 function setRootModelCatalogPath(content: string, catalogPath: string): string {
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const firstTable = findFirstRootTableIndex(lines);
   const key = `model_catalog_json = ${tomlString(catalogPath)}`;
   const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
@@ -607,7 +694,7 @@ function isOpencodexCatalogPath(path: string): boolean {
 function stripOpencodexCatalogPath(content: string): string {
   const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
   const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const firstTable = findFirstRootTableIndex(lines);
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   return lines
     .filter((line, index) => {

@@ -160,6 +160,60 @@ describe("injectCodexConfig integration (Design B)", () => {
     },
   );
 
+  test("preserves a root catalog assignment after a multiline array", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      "root_array = [",
+      '  ["item"],',
+      "]",
+      'model_catalog_json = "custom-catalog.json"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+    expect(config).toContain('root_array = [\n  ["item"],\n]');
+    expect(config.match(/^model_catalog_json\s*=/gm)?.length).toBe(1);
+    expect(config).toContain('model_catalog_json = "custom-catalog.json"');
+
+    const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
+    expect(profile).toContain('model_catalog_json = "custom-catalog.json"');
+  });
+
+  test.each([
+    ["basic", '"""'],
+    ["literal", "'''"],
+  ])("ignores table-shaped lines inside a multiline %s string", (_kind, delimiter) => {
+    const multiline = [
+      `root_text = ${delimiter}`,
+      "[not-a-table]",
+      delimiter,
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), [
+      multiline,
+      'model_catalog_json = "custom-catalog.json"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(true);
+
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(() => Bun.TOML.parse(config)).not.toThrow();
+    expect(config).toContain(multiline);
+    expect(config.match(/^model_catalog_json\s*=/gm)?.length).toBe(1);
+  });
+
   test("repairs an owned duplicate without replacing a commented user catalog", () => {
     const userAssignment = 'model_catalog_json = "custom-catalog.json" # user catalog';
     writeFileSync(join(codexHome, "config.toml"), [
