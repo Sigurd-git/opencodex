@@ -139,3 +139,64 @@ describe("credential pinning + loop fail-closed (review blockers)", () => {
     }
   });
 });
+
+import { runWithWebSearch, type WebSearchLoopDeps } from "../src/web-search/loop";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import type { AdapterEvent, ProviderAdapter } from "../src/adapters/base";
+
+describe("loop dispatch: xai arm fails closed without a sidecar (review blocker)", () => {
+  test("missing xaiSidecar yields the invariant error tool-result; forward executor and pool recorder untouched", async () => {
+    const firstPass: AdapterEvent[] = [
+      { type: "tool_call_start", id: "ws1", name: "web_search" },
+      { type: "tool_call_delta", arguments: "{\"query\":\"docs\"}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+    let pass = 0;
+    let sawToolResult = "";
+    const adapter: ProviderAdapter = {
+      name: "two-pass",
+      buildRequest: (parsed) => {
+        if (pass > 0) sawToolResult = JSON.stringify(parsed.context.messages ?? parsed);
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        const events = pass++ === 0 ? firstPass : [{ type: "text_delta", text: "answer" } as AdapterEvent, { type: "done" } as AdapterEvent];
+        for (const event of events) yield event;
+      },
+      async parseResponse() { throw new Error("unreachable"); },
+    };
+    const capturedForwardFetches: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      capturedForwardFetches.push(String(input instanceof Request ? input.url : input));
+      return new Response("{}", { status: 500 });
+    }) as typeof fetch;
+    let poolRecorded = 0;
+    try {
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter,
+        backend: "xai",
+        // xaiSidecar deliberately ABSENT — the invariant violation under test.
+        hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer forward-secret" }),
+        settings: { model: "grok-4.6", reasoning: "low", timeoutMs: 5000, describeImages: false },
+        maxSearches: 1,
+        recordSidecarOutcome: () => { poolRecorded += 1; },
+        incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+      } satisfies WebSearchLoopDeps);
+      // Drain the SSE so the loop completes.
+      await new Response(response.body).text();
+      // No network fetch may have carried the forward headers (executors were never invoked).
+      expect(capturedForwardFetches).toEqual([]);
+      // The pool recorder belongs to the OpenAI executor path only.
+      expect(poolRecorded).toBe(0);
+      // The second pass received the graceful error tool result.
+      expect(sawToolResult).toContain("without a resolved Grok OAuth provider");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
