@@ -95,7 +95,11 @@ codex/merge-loop-closeout (2 unique local commits), main, preview, dev.
 
 Run immediately before EACH delete batch; abort the batch on any intersection:
 
-1. `git worktree list --porcelain` — collect checked-out branches + dirty worktrees.
+1. `git worktree list --porcelain` — collect worktree paths and checked-out branches
+   (this reports metadata only, NOT status). Then for EACH listed path run
+   `git -C <path> status --porcelain`; any output marks that worktree dirty.
+   Protect both the dirty path and its attached branch (detached dirty worktrees
+   protect the path itself).
 2. `gh pr list --state open --json headRefName` — collect every open-PR head.
 3. Protected = {dev, main, preview} ∪ open-PR heads ∪ checked-out ∪ dirty-worktree
    branches. `comm -12` the sorted candidate list against sorted Protected; any
