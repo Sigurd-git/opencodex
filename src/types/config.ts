@@ -790,10 +790,10 @@ export interface OcxWebSearchSidecarConfig {
   /**
    * Which backend actually runs the server-side search. "openai" replays the hosted web_search via
    * the ChatGPT forward provider (gpt-mini sidecar); "anthropic" runs web_search_20250305 on a Claude
-   * model authenticated by the STORED anthropic OAuth credential. "xai" (Grok hosted web_search /
-   * x_search via stored Grok OAuth), "gemini" (google_search grounding via the Antigravity CCA
-   * transport), and "exa" (non-LLM search JSON via an operator key) are explicit-only and stay
-   * inactive until their executor ships. Unset ALWAYS resolves to "openai"; no backend is ever
+   * model authenticated by the STORED anthropic OAuth credential. "xai" runs Grok hosted web_search
+   * and optional x_search through stored Grok OAuth. "gemini" (google_search grounding via the
+   * Antigravity CCA transport) and "exa" (non-LLM search JSON via an operator key) are explicit-only
+   * and stay inactive until their executors ship. Unset ALWAYS resolves to "openai"; no backend is ever
    * auto-selected from credential availability (that once sent incompatible models to the
    * Anthropic API — see resolveSidecarBackend).
    */

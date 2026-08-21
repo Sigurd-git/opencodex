@@ -14,6 +14,7 @@ mock.module("../src/oauth", () => ({
 
 import { parseXaiResponsesSSE, validateXaiSearchOptions } from "../src/web-search/xai-executor";
 import { findXaiSidecarProvider, planWebSearch, xaiSearchOptionsFromConfig } from "../src/web-search";
+import { MAX_SIDECAR_RESPONSE_BYTES } from "../src/web-search/parse";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
@@ -78,6 +79,24 @@ describe("parseXaiResponsesSSE (live capture shapes, devlog 003)", () => {
     ]));
     expect(out.text).toBe("");
     expect(out.error).toContain("entitlement");
+  });
+
+  test("oversized stream cancels the upstream body", async () => {
+    let canceled = false;
+    const chunk = new Uint8Array(MAX_SIDECAR_RESPONSE_BYTES);
+    const response = new Response(new ReadableStream({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    }));
+
+    const out = await parseXaiResponsesSSE(response);
+
+    expect(out.error).toContain("byte bound");
+    expect(canceled).toBe(true);
   });
 });
 

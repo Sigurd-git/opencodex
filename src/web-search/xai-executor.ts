@@ -13,7 +13,7 @@
 import type { OcxProviderConfig } from "../types";
 import { getValidAccessToken, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
-import { signalWithTimeout } from "../lib/abort";
+import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { redactSecretString } from "../lib/redact";
 import { MAX_SIDECAR_RESPONSE_BYTES, type WebSearchSource } from "./parse";
@@ -112,12 +112,18 @@ export async function runXaiWebSearch(
       }),
       { abortSignal: linkedSignal.signal, label: "xai-web-search-sidecar" },
     );
+    const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     if (!res.ok) {
       const t = await res.text().catch(() => "");
+      detachBodyGuard();
       const entitlement = res.status === 401 || res.status === 403 ? " (Grok OAuth entitlement — re-run ocx login xai?)" : "";
       return { text: "", sources: [], error: `xai sidecar HTTP ${res.status}${entitlement}: ${redactSecretString(t.slice(0, 200))}` };
     }
-    return await parseXaiResponsesSSE(res);
+    try {
+      return await parseXaiResponsesSSE(res);
+    } finally {
+      detachBodyGuard();
+    }
   } catch (e) {
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[web-search] xai sidecar ${kind} (${Date.now() - t0}ms)`);
@@ -153,7 +159,11 @@ export async function parseXaiResponsesSSE(response: Response): Promise<SidecarO
       const { done, value } = await reader.read();
       if (done) break;
       responseBytes += value.byteLength;
-      if (responseBytes > MAX_SIDECAR_RESPONSE_BYTES * 8) { error = "xai sidecar stream exceeded byte bound"; break; }
+      if (responseBytes > MAX_SIDECAR_RESPONSE_BYTES * 8) {
+        error = "xai sidecar stream exceeded byte bound";
+        await reader.cancel(error).catch(() => {});
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       let idx;
       while ((idx = buffer.indexOf("\n\n")) >= 0) {
