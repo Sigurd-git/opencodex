@@ -36,7 +36,7 @@ dev head may exist where OAuth opt-in Responses leaks caller service_tier:
    | OAuth default | chat wire |
    | OAuth explicit Responses (modelAdapters) | responses wire, caller service_tier dropped |
    | API-key default | chat wire; no tier injected; caller service_tier not forwarded unless a capability declares it |
-   | API-key explicit Responses (modelAdapters) | responses wire; absent tier stays absent; caller service_tier dropped (no forwarding capability on this route; #2072 deferred) |
+   | API-key explicit Responses (modelAdapters) | responses wire; PRESERVE current dev semantics: absent tier stays absent, caller-supplied service_tier forwards verbatim (resolver proof: forwardCallerTier true on this route today; #2072 deferred) |
    | DeepSeek V4 flash/pro | responses default unchanged |
 
 ## Reasoning-streaming proof (#1886 origin)
