@@ -25,7 +25,7 @@ import {
   updateReasoningReplayServingIdentity,
 } from "../../responses/reasoning-replay-cache";
 import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
-import { buildCompactV1Output, COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, extractCompactUserMessages, isCompactionItemType } from "../../responses/compaction";
+import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
   copyPreviousResponseReplayProvenance,
@@ -611,27 +611,50 @@ async function opaqueBlobRejectionBodyForRecovery(
 
 function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
-  const body = parsed._rawBody;
-  if (!body || typeof body !== "object" || Array.isArray(body)) return;
-  const input = (body as { input?: unknown }).input;
-  if (!Array.isArray(input)) return;
-  let changed = false;
-  const recoveredInput = input.map(item => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-    const candidate = item as { type?: unknown; encrypted_content?: unknown };
-    if (!isCompactionItemType(candidate.type) || typeof candidate.encrypted_content !== "string") {
-      return item;
-    }
-    changed = true;
-    return {
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: compactionItemToText(candidate.encrypted_content) }],
-    };
-  });
-  // Mutate only the raw input carrier so the adapter rebuild sees the same degradation as its
-  // ordinary compaction scrub. Keeping the body object preserves non-enumerable persistence marks.
-  if (changed) (body as { input: unknown[] }).input = recoveredInput;
+}
+
+type OpaqueBlobRecoveryGuard = { attempted: boolean };
+
+type OpaqueBlobRecoveryResult =
+  | { kind: "skipped" }
+  | { kind: "recovered"; response: Response }
+  | { kind: "failed"; response: Response };
+
+async function attemptOpaqueBlobRecovery(
+  args: {
+    response: Response;
+    outboundBody?: string;
+    adapterName: string;
+    parsed: OcxParsedRequest;
+    guard: OpaqueBlobRecoveryGuard;
+    signal: AbortSignal;
+  },
+  rebuild: (kind: AttemptRecoveryKind) => Promise<Response | { failed: Response }>,
+): Promise<OpaqueBlobRecoveryResult> {
+  const errorBody = await opaqueBlobRejectionBodyForRecovery(
+    args.response,
+    args.outboundBody,
+    args.adapterName,
+    args.guard.attempted,
+    args.signal,
+  );
+  if (errorBody === undefined || !shouldAttemptOpaqueBlobRecovery({
+    status: args.response.status,
+    adapterName: args.adapterName,
+    outboundBody: args.outboundBody,
+    errorBody,
+    alreadyAttempted: args.guard.attempted,
+  })) {
+    return { kind: "skipped" };
+  }
+
+  args.guard.attempted = true;
+  prepareOpaqueBlobRecovery(args.parsed);
+  try { void args.response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+  const result = await rebuild("opaque-blob-rejection");
+  return "failed" in result
+    ? { kind: "failed", response: result.failed }
+    : { kind: "recovered", response: result };
 }
 
 function nonEmptyProviderApiKey(provider: OcxProviderConfig): string | undefined {
@@ -3002,7 +3025,7 @@ async function handleResponsesInner(
       request.releaseBodyObservation?.();
     }
 
-    let opaqueBlobRecoveryAttempted = false;
+    const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
     let rateLimitRetries = 0;
@@ -3070,6 +3093,7 @@ async function handleResponsesInner(
       }
     };
 
+    // Keep recovery kinds in sync with the generic `recovery:` loop below.
     passthroughRecovery: for (;;) {
 
     // Native Responses providers return before the generic adapter recovery loop below. Keep
@@ -3303,33 +3327,24 @@ async function handleResponsesInner(
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
     // Responses body still carries opaque state, then rebuild once through the ordinary adapter
     // sanitation path. A second rejection falls through unchanged because the guard stays armed.
-    const opaqueBlobErrorBody = await opaqueBlobRejectionBodyForRecovery(
-      upstreamResponse,
-      request.body,
-      adapter.name,
-      opaqueBlobRecoveryAttempted,
-      upstream.signal,
-    );
-    if (opaqueBlobErrorBody !== undefined && shouldAttemptOpaqueBlobRecovery({
-      status: upstreamResponse.status,
-      adapterName: adapter.name,
+    const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
+      response: upstreamResponse,
       outboundBody: request.body,
-      errorBody: opaqueBlobErrorBody,
-      alreadyAttempted: opaqueBlobRecoveryAttempted,
-    })) {
-      opaqueBlobRecoveryAttempted = true;
-      prepareOpaqueBlobRecovery(parsed);
-      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-      const result = await rebuildAndRefetch("opaque-blob-rejection");
-      if ("failed" in result) return result.failed;
-      upstreamResponse = result;
+      adapterName: adapter.name,
+      parsed,
+      guard: opaqueBlobRecoveryGuard,
+      signal: upstream.signal,
+    }, rebuildAndRefetch);
+    if (opaqueBlobRecovery.kind === "failed") return opaqueBlobRecovery.response;
+    if (opaqueBlobRecovery.kind === "recovered") {
+      upstreamResponse = opaqueBlobRecovery.response;
       continue passthroughRecovery;
     }
     break;
     }
     // Binding normally records before the first send. Repeat it only after a successful recovery
     // so an eviction during the extra round trip cannot leave the next cross-route turn cold.
-    if (opaqueBlobRecoveryAttempted && upstreamResponse.ok) {
+    if (opaqueBlobRecoveryGuard.attempted && upstreamResponse.ok) {
       updateReasoningReplayServingIdentity(parsed._reasoningReplayScope);
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
@@ -4401,7 +4416,7 @@ async function handleResponsesInner(
     // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
     // 413→429 rotation cannot silently undo the tightening.
     let imageRetryAttempted = false;
-    let opaqueBlobRecoveryAttempted = false;
+    const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
@@ -4479,6 +4494,7 @@ async function handleResponsesInner(
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
       }
     };
+    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
     recovery: for (;;) {
       if (
         upstreamResponse.status === 401
@@ -4639,27 +4655,20 @@ async function handleResponsesInner(
       // the missing authoritative signal. Rebuild once through the same sanitation path used by a
       // known route switch; invalidating is mandatory because `parsed` mutates in place and the
       // same-target cache would otherwise replay the rejected bytes verbatim.
-      const opaqueBlobErrorBody = await opaqueBlobRejectionBodyForRecovery(
-        upstreamResponse,
-        sameTargetRequest?.body,
-        activeAdapter.name,
-        opaqueBlobRecoveryAttempted,
-        upstream.signal,
-      );
-      if (opaqueBlobErrorBody !== undefined && shouldAttemptOpaqueBlobRecovery({
-        status: upstreamResponse.status,
-        adapterName: activeAdapter.name,
+      const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
+        response: upstreamResponse,
         outboundBody: sameTargetRequest?.body,
-        errorBody: opaqueBlobErrorBody,
-        alreadyAttempted: opaqueBlobRecoveryAttempted,
-      })) {
-        opaqueBlobRecoveryAttempted = true;
-        prepareOpaqueBlobRecovery(parsed);
+        adapterName: activeAdapter.name,
+        parsed,
+        guard: opaqueBlobRecoveryGuard,
+        signal: upstream.signal,
+      }, recovery => {
         invalidateSameTargetRequest();
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-        const result = await rebuildAndRefetch("opaque-blob-rejection");
-        if ("failed" in result) return result.failed;
-        upstreamResponse = result;
+        return rebuildAndRefetch(recovery);
+      });
+      if (opaqueBlobRecovery.kind === "failed") return opaqueBlobRecovery.response;
+      if (opaqueBlobRecovery.kind === "recovered") {
+        upstreamResponse = opaqueBlobRecovery.response;
         continue recovery;
       }
       // Anthropic 413 request_too_large: rebuild once with every image one tier lower
@@ -4683,7 +4692,7 @@ async function handleResponsesInner(
     }
     // Binding normally records before the first send. Repeat it only after a successful recovery
     // so an eviction during the extra round trip cannot leave the next cross-route turn cold.
-    if (opaqueBlobRecoveryAttempted && upstreamResponse.ok) {
+    if (opaqueBlobRecoveryGuard.attempted && upstreamResponse.ok) {
       updateReasoningReplayServingIdentity(parsed._reasoningReplayScope);
     }
     if (!upstreamResponse.ok) {
