@@ -29,6 +29,7 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest as Request } from "./helpers/management-auth";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/account-id";
+import { xaiSearchOptionsFromConfig } from "../src/web-search";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const forward: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" };
@@ -236,6 +237,33 @@ describe("xSearch config round-trip (review High)", () => {
     expect(cfg.webSearchSidecar).toEqual(original);
   });
 
+  test("rejects allowedXHandle typo without broadening or partially mutating x_search", async () => {
+    const original = {
+      backend: "xai" as const,
+      reasoning: "low",
+      xSearch: { enabled: true as const, allowedXHandles: ["trusted"] },
+    };
+    const cfg = config({ webSearchSidecar: structuredClone(original) });
+
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: {
+        webSearch: {
+          reasoning: "high",
+          xSearch: { enabled: true, allowedXHandle: ["xai"] },
+        },
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain("webSearch.xSearch.allowedXHandle");
+    expect(cfg.webSearchSidecar).toEqual(original);
+    expect(xaiSearchOptionsFromConfig(cfg.webSearchSidecar!)).toEqual({
+      xSearch: true,
+      allowedXHandles: ["trusted"],
+    });
+  });
+
   test.each([
     ["non-object block", "invalid", "webSearch.xSearch must be an object or null"],
     ["non-boolean enabled", { enabled: "true" }, "enabled must be a boolean"],
@@ -243,6 +271,7 @@ describe("xSearch config round-trip (review High)", () => {
     ["mixed handle array", { enabled: true, excludedXHandles: ["xai", 7] }, "excludedXHandles must be an array of strings"],
     ["non-string date", { enabled: true, fromDate: 20260801 }, "fromDate must be an ISO-8601 date"],
     ["malformed date", { enabled: true, toDate: "08/01/2026" }, "toDate must be an ISO-8601 date"],
+    ["unknown field", { enabled: true, scope: "following" }, "webSearch.xSearch.scope"],
   ])("rejects malformed xSearch input: %s", async (_name, xSearch, message) => {
     const cfg = config({ webSearchSidecar: { backend: "openai" } });
 

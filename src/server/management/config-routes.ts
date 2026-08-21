@@ -654,6 +654,17 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
           return jsonResponse({ error: "webSearch.xSearch must be an object or null" }, 400);
         }
         const x = body.webSearch.xSearch as Record<string, unknown>;
+        const allowedXSearchKeys = new Set([
+          "enabled",
+          "allowedXHandles",
+          "excludedXHandles",
+          "fromDate",
+          "toDate",
+        ]);
+        const unknownKey = Object.keys(x).find(key => !allowedXSearchKeys.has(key));
+        if (unknownKey !== undefined) {
+          return jsonResponse({ error: `webSearch.xSearch.${unknownKey} is not a supported field` }, 400);
+        }
         if (x.enabled !== undefined && typeof x.enabled !== "boolean") {
           return jsonResponse({ error: "webSearch.xSearch.enabled must be a boolean" }, 400);
         }
