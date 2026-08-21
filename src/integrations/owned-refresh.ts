@@ -12,7 +12,10 @@ import type { IntegrationIO } from "./config-io";
 import type { IntegrationClientId } from "./registry";
 import { runIntegrationMutationFlight } from "./mutation-flight";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
-import { refreshIntegrationCoordinated } from "./writer";
+import {
+  refreshIntegrationCoordinated,
+  type CoordinatedIntegrationOptions,
+} from "./writer";
 
 export interface OwnedIntegrationRefreshInput {
   clientId: IntegrationClientId;
@@ -39,6 +42,7 @@ export interface OwnedIntegrationRefreshOutcome {
  */
 export async function refreshOwnedIntegration(
   input: OwnedIntegrationRefreshInput,
+  options?: CoordinatedIntegrationOptions,
 ): Promise<OwnedIntegrationRefreshOutcome | null> {
   const store = input.store ?? createIntegrationStateStore();
 
@@ -57,7 +61,7 @@ export async function refreshOwnedIntegration(
     input.clientId,
     "refresh",
     input.io?.now ?? Date.now,
-    () => refreshIntegrationCoordinated(bound),
+    () => refreshIntegrationCoordinated(bound, options),
   );
   return result.ok
     ? {

@@ -8,7 +8,8 @@ import { INTEGRATION_CLIENTS } from "../src/integrations/registry";
 import { IntegrationMutationBusyError, runIntegrationMutationFlight } from "../src/integrations/mutation-flight";
 import { refreshOwnedIntegration } from "../src/integrations/owned-refresh";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
-import { applyIntegration } from "../src/integrations/writer";
+import type { IntegrationWriterLockSeams } from "../src/integrations/writer-lock";
+import { applyIntegration, disableIntegrationCoordinated } from "../src/integrations/writer";
 import type { OcxConfig } from "../src/types";
 
 /**
@@ -219,6 +220,84 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
     expect(outcome?.reason).toContain("mcode is not installed");
     expect(existsSync(INTEGRATION_CLIENTS.mcode.detectDir(env, home))).toBe(false);
     expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+  });
+
+  test("serializes a CLI refresh racing a server disable across the process boundary", async () => {
+    expect(applyIntegration(input(oldModels)).ok).toBe(true);
+    const before = readFileSync(configPath, "utf8");
+    const recordBefore = JSON.stringify(store.readRecords().mcode);
+
+    let held = false;
+    let acquisitions = 0;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let observeFirst!: () => void;
+    let observeSecond!: () => void;
+    let observeWaiter!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>(resolve => { releaseSecond = resolve; });
+    const firstAcquired = new Promise<void>(resolve => { observeFirst = resolve; });
+    const secondAcquired = new Promise<void>(resolve => { observeSecond = resolve; });
+    const waiterBlocked = new Promise<void>(resolve => { observeWaiter = resolve; });
+    const released: Array<() => void> = [];
+    const lockSeams: IntegrationWriterLockSeams = {
+      writeFile: async () => {
+        if (held) throw Object.assign(new Error("contended"), { code: "EEXIST" });
+        held = true;
+        acquisitions += 1;
+        if (acquisitions === 1) {
+          observeFirst();
+          await firstGate;
+        } else if (acquisitions === 2) {
+          observeSecond();
+          await secondGate;
+        }
+      },
+      removeFile: async () => {
+        held = false;
+        for (const release of released.splice(0)) release();
+      },
+      now: () => 0,
+      delay: async () => {
+        observeWaiter();
+        await new Promise<void>(resolve => { released.push(resolve); });
+      },
+      pid: 22,
+    };
+
+    // These calls model separate processes: owned refresh has the CLI's in-memory
+    // flight map, while the direct coordinated disable has the server's map.
+    const refresh = refreshOwnedIntegration(input(newModels), { lockSeams });
+    await firstAcquired;
+    const disable = disableIntegrationCoordinated(input(newModels), { lockSeams });
+    await waiterBlocked;
+
+    // The contender cannot observe or create a half-committed transaction.
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    expect(JSON.stringify(store.readRecords().mcode)).toBe(recordBefore);
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["apply"]);
+
+    releaseFirst();
+    await secondAcquired;
+    expect(await refresh).toEqual({ client: "mcode", ok: true, changed: true });
+    const refreshed = Bun.YAML.parse(readFileSync(configPath, "utf8")) as {
+      custom_provider: { opencodex: { models: Record<string, unknown> } };
+    };
+    expect(refreshed.custom_provider.opencodex.models["openai/gpt-5.6-sol"]).toEqual({
+      limit: { context: 922_000 },
+      thinking: { effortOptions: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    });
+    expect(store.readRecords().mcode).toBeDefined();
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["refresh", "apply"]);
+
+    releaseSecond();
+    expect((await disable).ok).toBe(true);
+    expect(store.readRecords().mcode).toBeUndefined();
+    expect(store.listOperations("mcode").map(row => row.kind)).toEqual(["disable", "refresh", "apply"]);
+    const finalDocument = Bun.YAML.parse(readFileSync(configPath, "utf8")) as {
+      custom_provider?: { opencodex?: unknown };
+    };
+    expect(finalDocument.custom_provider?.opencodex).toBeUndefined();
   });
 });
 
