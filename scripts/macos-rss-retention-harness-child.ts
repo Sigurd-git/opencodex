@@ -65,6 +65,28 @@ process.stdout.write(JSON.stringify({
   watchdogIncluded: true,
 }) + "\n");
 
+/**
+ * GC control channel (devlog/_plan/260822_260822-bun14-followup-memory/020):
+ * SIGUSR2 runs a full collection INSIDE the measured process and reports a
+ * timestamped receipt with the measured pause on the same stdout JSONL channel
+ * as "ready". The locked 7h retention protocol never sends SIGUSR2, so this is
+ * inert for existing runs; only the GC-relief evaluation orchestrator uses it.
+ */
+process.on("SIGUSR2", () => {
+  const t0 = Bun.nanoseconds();
+  try {
+    Bun.gc(true);
+    const durationMs = (Bun.nanoseconds() - t0) / 1e6;
+    process.stdout.write(JSON.stringify({ type: "gc", at: Date.now(), durationMs }) + "\n");
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      type: "gc-error",
+      at: Date.now(),
+      message: error instanceof Error ? error.message : String(error),
+    }) + "\n");
+  }
+});
+
 await new Promise<void>((resolve) => {
   let closing = false;
 
