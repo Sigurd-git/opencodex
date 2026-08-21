@@ -192,3 +192,22 @@ describe("HTTP contract on /api/sidecar-settings", () => {
     expect(rejection.allowedModels).toContain("claude-haiku-4-5");
   });
 });
+
+describe("xSearch config round-trip (review High)", () => {
+  test("PUT validates doc limits (400) and persists+echoes a valid block; GET carries it; null clears", async () => {
+    usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
+    const cfg = config();
+    const bad = await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { xSearch: { enabled: true, allowedXHandles: ["a"], excludedXHandles: ["b"] } } } });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toContain("mutually exclusive");
+    const ok = await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { xSearch: { enabled: true, allowedXHandles: ["xai"], fromDate: "2026-08-01" } } } });
+    expect(ok.status).toBe(200);
+    const putBody = await ok.json() as { webSearch: { xSearch?: unknown } };
+    expect(putBody.webSearch.xSearch).toEqual({ enabled: true, allowedXHandles: ["xai"], fromDate: "2026-08-01" });
+    const get = await sidecarSettings(cfg);
+    expect(((await get.json()) as { webSearch: { xSearch?: unknown } }).webSearch.xSearch).toEqual({ enabled: true, allowedXHandles: ["xai"], fromDate: "2026-08-01" });
+    const clear = await sidecarSettings(cfg, { method: "PUT", body: { webSearch: { xSearch: null } } });
+    expect(clear.status).toBe(200);
+    expect(cfg.webSearchSidecar?.xSearch).toBeUndefined();
+  });
+});

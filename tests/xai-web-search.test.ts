@@ -6,6 +6,11 @@ mock.module("../src/oauth/store", () => ({
   ...storeModule,
   getAccountSet: (provider: string) => accountSets[provider] ?? null,
 }));
+import * as oauthModule from "../src/oauth";
+mock.module("../src/oauth", () => ({
+  ...oauthModule,
+  getValidAccessToken: async () => "test-token-xyz",
+}));
 
 import { parseXaiResponsesSSE, validateXaiSearchOptions } from "../src/web-search/xai-executor";
 import { findXaiSidecarProvider, planWebSearch, xaiSearchOptionsFromConfig } from "../src/web-search";
@@ -111,5 +116,26 @@ describe("planWebSearch xai arm (L7)", () => {
     expect(findXaiSidecarProvider(config({ providers: { routed, xai: { ...xaiProvider, disabled: true } } }))).toBeUndefined();
     expect(findXaiSidecarProvider(config({ providers: { routed, xai: { ...xaiProvider, authMode: "key", apiKey: "k" } } }))).toBeUndefined();
     expect(findXaiSidecarProvider(config())?.providerName).toBe("xai");
+  });
+});
+
+describe("credential pinning + loop fail-closed (review blockers)", () => {
+  test("lookalike origin https://api.x.ai.evil never receives the bearer (falls back to canonical)", async () => {
+    const captured: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      captured.push(String(input instanceof Request ? input.url : input));
+      return new Response("{}", { status: 401 });
+    }) as typeof fetch;
+    try {
+      const evil: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.x.ai.evil/v1", authMode: "oauth" };
+      const { runXaiWebSearch } = await import("../src/web-search/xai-executor");
+      const out = await runXaiWebSearch("q", "xai", evil, { model: "grok-4.6", reasoning: "low", timeoutMs: 5000, describeImages: false }, {});
+      expect(captured.length).toBeGreaterThanOrEqual(1);
+      for (const url of captured) expect(new URL(url).origin).toBe("https://api.x.ai");
+      expect(out.error).toContain("401");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

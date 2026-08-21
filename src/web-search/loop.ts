@@ -668,10 +668,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         try {
           if (backend === "anthropic" && anthropicSidecar) {
             outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal);
-          } else if (backend === "xai" && deps.xaiSidecar) {
+          } else if (backend === "xai") {
             // L7: stored Grok OAuth to the pinned api.x.ai Responses endpoint; same
             // never-throws contract and no Codex/OpenAI pool outcome recording (F5 parity).
-            outcome = await runXaiWebSearch(query, deps.xaiSidecar.providerName, deps.xaiSidecar.provider, settings, deps.xaiSearchOptions ?? {}, signal);
+            // A missing xaiSidecar is an invariant violation — fail CLOSED with an error
+            // outcome rather than falling through to the forward-header OpenAI executor
+            // (review High: that fallthrough would be credential-sensitive).
+            outcome = deps.xaiSidecar
+              ? await runXaiWebSearch(query, deps.xaiSidecar.providerName, deps.xaiSidecar.provider, settings, deps.xaiSearchOptions ?? {}, signal)
+              : { text: "", sources: [], error: "xai backend selected without a resolved Grok OAuth provider" };
           } else {
             outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome);
           }

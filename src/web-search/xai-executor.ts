@@ -76,8 +76,16 @@ export async function runXaiWebSearch(
   } catch (e) {
     return { text: "", sources: [], error: `xai sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(e)}` };
   }
-  // Credential pinning: only an api.x.ai base may carry the OAuth bearer.
-  const base = provider.baseUrl?.startsWith(XAI_RESPONSES_ORIGIN) ? provider.baseUrl.replace(/\/+$/, "") : `${XAI_RESPONSES_ORIGIN}/v1`;
+  // Credential pinning: only the EXACT api.x.ai origin may carry the OAuth bearer.
+  // A prefix check would admit https://api.x.ai.evil/ (review Critical); parse and
+  // compare origins, falling back to the canonical endpoint on any mismatch.
+  let base = `${XAI_RESPONSES_ORIGIN}/v1`;
+  if (provider.baseUrl) {
+    try {
+      const parsed = new URL(provider.baseUrl);
+      if (parsed.origin === XAI_RESPONSES_ORIGIN) base = provider.baseUrl.replace(/\/+$/, "");
+    } catch { /* malformed baseUrl: keep the canonical endpoint */ }
+  }
   const url = `${base}/responses`;
   const instruction = settings.describeImages ? BASE_INSTRUCTION + IMAGE_INSTRUCTION : BASE_INSTRUCTION;
   const body = {
