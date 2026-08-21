@@ -10,15 +10,15 @@
  */
 import type { OcxProviderConfig } from "../types";
 import { getValidAccessTokenSnapshot, publicOAuthAuthenticationErrorMessage } from "../oauth";
-import { getAccountSet } from "../oauth/store";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
-import { signalWithTimeout } from "../lib/abort";
+import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
+import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { redactSecretString } from "../lib/redact";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { getProviderRegistryEntry } from "../providers/registry";
-import type { WebSearchSource } from "./parse";
+import { MAX_SIDECAR_RESPONSE_BYTES, type WebSearchSource } from "./parse";
 import { BASE_INSTRUCTION, IMAGE_INSTRUCTION, type SidecarOutcome, type SidecarSettings } from "./executor";
 
 const CCA_FALLBACK_BASE = "https://daily-cloudcode-pa.googleapis.com";
@@ -35,14 +35,14 @@ export async function runGeminiWebSearch(
   abortSignal?: AbortSignal,
 ): Promise<SidecarOutcome> {
   let token: string;
+  let project: string | undefined;
   try {
-    token = (await getValidAccessTokenSnapshot(providerName)).accessToken;
+    const snapshot = await getValidAccessTokenSnapshot(providerName);
+    token = snapshot.accessToken;
+    project = snapshot.projectId;
   } catch (e) {
     return { text: "", sources: [], error: `gemini sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(e)}` };
   }
-  const set = getAccountSet(providerName);
-  const credential = set?.accounts.find(account => account.id === set.activeAccountId)?.credential as { projectId?: string } | undefined;
-  const project = credential?.projectId;
   if (!project) {
     return { text: "", sources: [], error: "gemini sidecar missing Cloud Code Assist project id — re-run ocx login google-antigravity" };
   }
@@ -82,12 +82,30 @@ export async function runGeminiWebSearch(
       }),
       { abortSignal: linkedSignal.signal, label: "gemini-web-search-sidecar" },
     );
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      return { text: "", sources: [], error: `gemini sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
+    const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
+    try {
+      const bounded = await readBoundedResponseBytes(res, {
+        maxBytes: MAX_SIDECAR_RESPONSE_BYTES,
+        signal: linkedSignal.signal,
+      });
+      if (bounded.oversized) {
+        const prefix = res.ok ? "gemini sidecar response" : `gemini sidecar HTTP ${res.status} response`;
+        return { text: "", sources: [], error: `${prefix} exceeded byte bound` };
+      }
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bounded.bytes);
+      if (!res.ok) {
+        return { text: "", sources: [], error: `gemini sidecar HTTP ${res.status}: ${redactSecretString(text.slice(0, 200))}` };
+      }
+      let payload: unknown = null;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        // The mapper owns the stable malformed/empty JSON outcome.
+      }
+      return mapCcaGroundedResponse(payload);
+    } finally {
+      detachBodyGuard();
     }
-    const payload = await res.json().catch(() => null);
-    return mapCcaGroundedResponse(payload);
   } catch (e) {
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[web-search] gemini sidecar ${kind} (${Date.now() - t0}ms)`);

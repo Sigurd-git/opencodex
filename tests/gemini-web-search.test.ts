@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as storeModule from "../src/oauth/store";
+import { MAX_SIDECAR_RESPONSE_BYTES } from "../src/web-search/parse";
 
 let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean; credential?: Record<string, unknown> }>; activeAccountId?: string }> = {};
 mock.module("../src/oauth/store", () => ({
@@ -21,7 +22,26 @@ function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
 function parsedWithWebSearch() {
   return parseRequest({ model: "routed/model", input: "search", stream: true, tools: [{ type: "web_search" }] });
 }
-afterEach(() => { accountSets = {}; });
+let accessSnapshot = {
+  provider: "google-antigravity",
+  accountId: "a1",
+  generation: "generation-a",
+  accessToken: "gem-token-abc",
+  projectId: "proj-9",
+};
+let afterAccessSnapshot: (() => void) | undefined;
+
+afterEach(() => {
+  accountSets = {};
+  accessSnapshot = {
+    provider: "google-antigravity",
+    accountId: "a1",
+    generation: "generation-a",
+    accessToken: "gem-token-abc",
+    projectId: "proj-9",
+  };
+  afterAccessSnapshot = undefined;
+});
 
 describe("mapCcaGroundedResponse (002 live capture shape)", () => {
   test("wrapped response -> text + deduped grounding sources", () => {
@@ -81,7 +101,11 @@ import { runGeminiWebSearch } from "../src/web-search/gemini-executor";
 import * as oauthModule from "../src/oauth";
 mock.module("../src/oauth", () => ({
   ...oauthModule,
-  getValidAccessTokenSnapshot: async () => ({ accessToken: "gem-token-abc", expiresAt: Date.now() + 3600_000 }),
+  getValidAccessTokenSnapshot: async () => {
+    const snapshot = accessSnapshot;
+    afterAccessSnapshot?.();
+    return snapshot;
+  },
 }));
 import { runWithWebSearch, type WebSearchLoopDeps } from "../src/web-search/loop";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -118,6 +142,94 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
       // tiered wire model with thinkingLevel "low" — both must reach the envelope.
       expect(body.model).toBe("gemini-3.7-flash-tiered");
       expect(body.request.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "low" } });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("uses one atomic OAuth snapshot when the active account changes before dispatch", async () => {
+    accessSnapshot = {
+      provider: "google-antigravity",
+      accountId: "account-a",
+      generation: "generation-a",
+      accessToken: "token-a",
+      projectId: "project-a",
+    };
+    accountSets = {
+      "google-antigravity": {
+        accounts: [
+          { id: "account-a", credential: { projectId: "project-a" } },
+          { id: "account-b", credential: { projectId: "project-b" } },
+        ],
+        activeAccountId: "account-a",
+      },
+    };
+    afterAccessSnapshot = () => {
+      accountSets["google-antigravity"]!.activeAccountId = "account-b";
+    };
+    let request: RequestInit | undefined;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      request = init;
+      return new Response(JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "ok" }] } }] } }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const out = await runGeminiWebSearch("q", "google-antigravity", cca, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 });
+      expect(out.text).toBe("ok");
+      expect((request!.headers as Record<string, string>)["Authorization"]).toBe("Bearer token-a");
+      expect(JSON.parse(String(request!.body)).project).toBe("project-a");
+      expect(accountSets["google-antigravity"]!.activeAccountId).toBe("account-b");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("an abort immediately after headers cancels and settles the response body", async () => {
+    const parent = new AbortController();
+    let bodyCancelled = false;
+    let bodyCancelSettled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "late" }] } }] } })));
+      },
+      cancel() {
+        bodyCancelled = true;
+        return Promise.resolve().then(() => { bodyCancelSettled = true; });
+      },
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(resolve => {
+      resolve(new Response(body, { status: 200 }));
+      parent.abort(new DOMException("client disconnected", "AbortError"));
+    })) as typeof fetch;
+    try {
+      const out = await runGeminiWebSearch("q", "google-antigravity", cca, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 }, parent.signal);
+      await Promise.resolve();
+      expect(out.error).toBeDefined();
+      expect(bodyCancelled).toBe(true);
+      expect(bodyCancelSettled).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test.each([
+    ["success", 200],
+    ["error", 500],
+  ] as const)("oversized %s body is rejected and cancelled", async (_branch, status) => {
+    let bodyCancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_SIDECAR_RESPONSE_BYTES + 1).fill(0x61));
+      },
+      cancel() { bodyCancelled = true; },
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(body, { status })) as typeof fetch;
+    try {
+      const out = await runGeminiWebSearch("q", "google-antigravity", cca, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 });
+      expect(out.error).toContain("byte bound");
+      expect(bodyCancelled).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
     }
