@@ -40,9 +40,37 @@ describe("runExaWebSearch key hygiene (canary)", () => {
   test("the key never reaches the outcome even when upstream echoes it in an error", async () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Response("invalid key exa-canary-9876543210 rejected", { status: 401 })) as typeof fetch;
-    try {
+   try {
       const out = await runExaWebSearch("q", "exa-canary-9876543210", { model: "m", reasoning: "low", timeoutMs: 5000, describeImages: false });
       expect(out.error).toContain("401");
+      expect(JSON.stringify(out)).not.toContain("exa-canary");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+ });
+
+  test("a key straddling the 200-char truncation boundary never leaks a prefix", async () => {
+    // Position the key so any post-truncation scrub would leave a literal prefix.
+    const key = "exa-canary-boundary-9876543210";
+    const body = "x".repeat(195) + key + " rejected";
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(body, { status: 401 })) as typeof fetch;
+    try {
+      const out = await runExaWebSearch("q", key, { model: "m", reasoning: "low", timeoutMs: 5000, describeImages: false });
+      expect(out.error).toContain("401");
+      expect(JSON.stringify(out)).not.toContain("exa-canary");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a fetch rejection carrying the key in its message is scrubbed", async () => {
+    const key = "exa-canary-reject-9876543210";
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error(`connect refused for x-api-key ${key}`); }) as typeof fetch;
+    try {
+      const out = await runExaWebSearch("q", key, { model: "m", reasoning: "low", timeoutMs: 5000, describeImages: false });
+      expect(out.error).toBeDefined();
       expect(JSON.stringify(out)).not.toContain("exa-canary");
     } finally {
       globalThis.fetch = realFetch;

@@ -49,7 +49,9 @@ export async function runExaWebSearch(
     );
     if (!res.ok) {
       const t = await res.text().catch(() => "");
-      return { text: "", sources: [], error: `exa sidecar HTTP ${res.status}: ${scrub(t.slice(0, 200))}` };
+      // Scrub BEFORE truncating: slicing first can cut the literal key at the
+      // boundary, leaving an unscrubbable key prefix in the surviving text.
+      return { text: "", sources: [], error: `exa sidecar HTTP ${res.status}: ${scrub(t).slice(0, 200)}` };
     }
     const payload = await res.json().catch(() => null);
     return mapExaSearchResponse(payload);
