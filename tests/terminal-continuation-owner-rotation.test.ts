@@ -19,6 +19,7 @@ import type {
 
 interface BuildObservation {
   key: string;
+  ownerCredential?: string;
   continuation?: string;
 }
 
@@ -84,7 +85,12 @@ mock.module("../src/server/adapter-resolve", () => ({
       name: "anthropic",
       buildRequest(parsed: OcxParsedRequest) {
         const continuation = parsed._providerContinuation?.kiro?.conversationId;
-        builds.push({ key, ...(continuation ? { continuation } : {}) });
+        const ownerCredential = parsed._providerContinuationOwner?.credentialIdentity;
+        builds.push({
+          key,
+          ...(ownerCredential ? { ownerCredential } : {}),
+          ...(continuation ? { continuation } : {}),
+        });
         return {
           url: "https://owned-terminal.test/v1/messages",
           method: "POST",
@@ -234,11 +240,11 @@ describe("terminal continuation provider-owner rotation", () => {
       `Bearer ${keyB}`,
     ]);
     expect(builds).toEqual([
-      { key: keyA },
-      { key: keyA, continuation: "private-a" },
-      { key: keyA, continuation: "private-a" },
-      { key: keyB },
-      { key: keyB, continuation: "private-b" },
+      { key: keyA, ownerCredential: keyAIdentity },
+      { key: keyA, ownerCredential: keyAIdentity, continuation: "private-a" },
+      { key: keyA, ownerCredential: keyAIdentity, continuation: "private-a" },
+      { key: keyB, ownerCredential: keyBIdentity },
+      { key: keyB, ownerCredential: keyBIdentity, continuation: "private-b" },
     ]);
     expect(phases).toEqual([]);
   });
