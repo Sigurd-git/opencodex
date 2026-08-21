@@ -670,7 +670,7 @@ describe("service memory section (#314 WP4)", () => {
     };
 
     const captureDoctor = async (args: string[]): Promise<{ lines: string[]; exitCode: number | undefined }> => {
-      const previousExitCode = process.exitCode;
+      const previousExitCode = process.exitCode ?? 0;
       const realLog = console.log;
       const lines: string[] = [];
       try {
