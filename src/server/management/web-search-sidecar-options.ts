@@ -16,20 +16,34 @@
 import type { OcxConfig } from "../../types";
 import { AUTH_SLOT_MODELS, resolveSidecarAuth } from "../../sidecar/auth";
 import { pickerVisibleSidecarCandidates, type SidecarCandidate } from "../../sidecar/candidates";
-import { isWebSearchAuthSlotModel, webSearchSidecarCandidates } from "../../web-search/backends";
+import { WEB_SEARCH_BACKENDS, webSearchSidecarCandidates } from "../../web-search/backends";
+
+export type WebSearchBackend = "openai" | "anthropic";
+
+export interface WebSearchCandidateRow extends SidecarCandidate {
+  /** Executor backend that admitted this exact candidate row. */
+  backend: WebSearchBackend;
+}
 
 export interface WebSearchModelOption {
   value: string;
   label: string;
+  /** Exact runnable pair represented by this picker row. */
+  backend: WebSearchBackend;
+  model: string;
   /** True when the row is an auth-slot entitlement rather than a picker row. */
   authSlot?: boolean;
 }
 
 /** The candidate rows the web-search executors can actually run right now. */
-export async function webSearchCandidateRows(config: OcxConfig): Promise<SidecarCandidate[]> {
+export async function webSearchCandidateRows(config: OcxConfig): Promise<WebSearchCandidateRow[]> {
   const auth = resolveSidecarAuth(config);
   const all = await pickerVisibleSidecarCandidates(config, auth);
-  return webSearchSidecarCandidates(config, auth, all);
+  return webSearchSidecarCandidates(config, auth, all).flatMap(candidate => {
+    const descriptor = WEB_SEARCH_BACKENDS.find(entry =>
+      entry.isActive(auth) && entry.eligibleModel(candidate, auth));
+    return descriptor ? [{ ...candidate, backend: descriptor.backend }] : [];
+  });
 }
 
 /**
@@ -39,7 +53,7 @@ export async function webSearchCandidateRows(config: OcxConfig): Promise<Sidecar
  */
 export function webSearchModelOptionsFrom(
   config: Pick<OcxConfig, "webSearchSidecar">,
-  candidates: readonly SidecarCandidate[],
+  candidates: readonly WebSearchCandidateRow[],
 ): WebSearchModelOption[] {
   const byValue = new Map<string, WebSearchModelOption>();
   for (const candidate of candidates) {
@@ -47,12 +61,19 @@ export function webSearchModelOptionsFrom(
     byValue.set(candidate.id, {
       value: candidate.id,
       label: candidate.id,
+      backend: candidate.backend,
+      model: candidate.id,
       ...(candidate.authSlot ? { authSlot: true } : {}),
     });
   }
   const persisted = config.webSearchSidecar?.model;
   if (persisted && !byValue.has(persisted)) {
-    byValue.set(persisted, { value: persisted, label: persisted });
+    byValue.set(persisted, {
+      value: persisted,
+      label: persisted,
+      backend: config.webSearchSidecar?.backend ?? "openai",
+      model: persisted,
+    });
   }
   return [...byValue.values()].sort((a, b) => a.value.localeCompare(b.value));
 }
@@ -64,26 +85,32 @@ export function webSearchModelOptionsFrom(
  * and refusing it would make settings order-dependent on login state.
  */
 export function webSearchModelIsRejected(
+  backend: WebSearchBackend,
   requested: string,
-  candidates: readonly SidecarCandidate[],
+  candidates: readonly WebSearchCandidateRow[],
 ): boolean {
-  if (isWebSearchAuthSlotModel(requested)) return false;
-  return !candidates.some(candidate => candidate.id === requested);
+  if (requested === AUTH_SLOT_MODELS.codex) return backend !== "openai";
+  if (requested === AUTH_SLOT_MODELS.anthropic) return backend !== "anthropic";
+  return !candidates.some(candidate => candidate.backend === backend && candidate.id === requested);
 }
 
 /** Uniform 400 payload naming the filter, mirroring visionDescriberRejection's shape. */
 export function webSearchModelRejection(
   field: string,
+  backend: WebSearchBackend,
   requested: string,
-  candidates: readonly SidecarCandidate[],
+  candidates: readonly WebSearchCandidateRow[],
 ): { error: string; allowedModels: string[] } {
-  const allowed = new Set(candidates.map(candidate => candidate.id));
-  // The gate accepts auth slots unconditionally, so the legal set must list them.
+  const allowed = new Set(candidates
+    .filter(candidate => candidate.backend === backend)
+    .map(candidate => candidate.id));
+  // Preserve the response contract: allowedModels lists both always-configurable
+  // auth-slot ids even though the pair gate below binds each to its own backend.
   allowed.add(AUTH_SLOT_MODELS.codex);
   allowed.add(AUTH_SLOT_MODELS.anthropic);
   return {
-    error: `${field}: "${requested}" is not a web-search sidecar candidate — the model must be ` +
-      "picker-visible and runnable by an active executor-backed backend (or an auth-slot model)",
+    error: `${field}: backend/model pair "${backend}/${requested}" is not a web-search sidecar candidate — ` +
+      "the model must be picker-visible and runnable by that executor-backed backend (or its auth-slot model)",
     allowedModels: [...allowed].sort(),
   };
 }

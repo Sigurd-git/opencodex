@@ -1094,11 +1094,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // so an id outside (runnable candidates ∪ auth slots) can never run. Same
       // module as /api/sidecar-settings — a gate on one route and a stale copy on
       // the other is no gate at all.
-      if (field === "webSearchSidecar" && typeof section.model === "string" && section.model !== "") {
-        const requested = section.model;
+      if (field === "webSearchSidecar"
+        && (section.model !== undefined || section.backend !== undefined)) {
+        const stored = config.claudeCode?.webSearchSidecar;
+        const effectiveBackend = section.backend === "anthropic"
+          ? "anthropic"
+          : section.backend === "openai"
+            ? "openai"
+            : section.backend === null
+              ? config.webSearchSidecar?.backend ?? "openai"
+              : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
+        const effectiveModel = section.model === ""
+          ? config.webSearchSidecar?.model
+          : typeof section.model === "string"
+            ? section.model
+            : stored?.model ?? config.webSearchSidecar?.model;
         const candidates = await webSearchCandidateRows(config);
-        if (webSearchModelIsRejected(requested, candidates)) {
-          return jsonResponse(webSearchModelRejection("webSearchSidecar.model", requested, candidates), 400);
+        if (effectiveModel && webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
+          return jsonResponse(webSearchModelRejection(
+            "webSearchSidecar.model",
+            effectiveBackend,
+            effectiveModel,
+            candidates,
+          ), 400);
         }
       }
     }

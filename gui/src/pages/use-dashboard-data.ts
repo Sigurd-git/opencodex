@@ -466,7 +466,12 @@ export function useDashboardData(apiBase: string) {
   }, [grouped, modelQuery]);
   const sidecarModels = useMemo(() => {
     // Server-computed runnable set when present (#2188); legacy union otherwise.
-    return webSearchModelOptionsForPicker(sidecar?.webSearchModels, models, sidecar?.webSearch.model);
+    return webSearchModelOptionsForPicker(
+      sidecar?.webSearchModels,
+      models,
+      sidecar?.webSearch.model,
+      sidecar?.webSearch.backend,
+    );
   }, [models, sidecar?.webSearchModels, sidecar?.webSearch]);
   const visionModels = useMemo(
     () => visionModelOptions(sidecar?.visionModels, models, sidecar?.vision?.model, sidecar?.vision?.backend),

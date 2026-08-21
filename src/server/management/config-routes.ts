@@ -555,6 +555,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, or null" }, 400);
     }
+    if (body.webSearch?.model !== undefined && typeof body.webSearch.model !== "string") {
+      return jsonResponse({ error: "webSearch.model must be a string" }, 400);
+    }
     if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
       && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
       return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
@@ -610,11 +613,19 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
 
     if (body.webSearch) {
-      if (typeof body.webSearch.model === "string" && body.webSearch.model !== "") {
-        const requested = body.webSearch.model;
+      const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
+      const effectiveBackend = body.webSearch.backend === "anthropic"
+        ? "anthropic"
+        : body.webSearch.backend === "openai" || body.webSearch.backend === null
+          ? "openai"
+          : config.webSearchSidecar?.backend ?? "openai";
+      const effectiveModel = typeof body.webSearch.model === "string"
+        ? body.webSearch.model || undefined
+        : config.webSearchSidecar?.model;
+      if (pairTouched && effectiveModel) {
         const candidates = await webSearchCandidateRows(config);
-        if (webSearchModelIsRejected(requested, candidates)) {
-          return jsonResponse(webSearchModelRejection("webSearch.model", requested, candidates), 400);
+        if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
+          return jsonResponse(webSearchModelRejection("webSearch.model", effectiveBackend, effectiveModel, candidates), 400);
         }
       }
       config.webSearchSidecar = { ...config.webSearchSidecar };

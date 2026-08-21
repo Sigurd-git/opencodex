@@ -49,8 +49,8 @@ describe("web-search membership gate", () => {
     usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
     managementRows = [{ provider: "openai", id: "gpt-5.6-terra", disabled: false, native: true }];
     const candidates = await webSearchCandidateRows(config());
-    expect(webSearchModelIsRejected("o3-mini", candidates)).toBe(true);
-    const rejection = webSearchModelRejection("webSearch.model", "o3-mini", candidates);
+    expect(webSearchModelIsRejected("openai", "o3-mini", candidates)).toBe(true);
+    const rejection = webSearchModelRejection("webSearch.model", "openai", "o3-mini", candidates);
     expect(rejection.error).toContain("web-search sidecar candidate");
     expect(rejection.allowedModels).toContain("gpt-5.6-terra");
   });
@@ -59,14 +59,15 @@ describe("web-search membership gate", () => {
     usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
     managementRows = [{ provider: "openai", id: "gpt-5.6-terra", disabled: false, native: true }];
     const candidates = await webSearchCandidateRows(config());
-    expect(webSearchModelIsRejected("gpt-5.6-terra", candidates)).toBe(false);
+    expect(webSearchModelIsRejected("openai", "gpt-5.6-terra", candidates)).toBe(false);
   });
 
   test("auth-slot models pass even with no login (settings must not be login-order-dependent)", async () => {
     const candidates = await webSearchCandidateRows(config());
     expect(candidates).toEqual([]);
-    expect(webSearchModelIsRejected("gpt-5.6-luna", candidates)).toBe(false);
-    expect(webSearchModelIsRejected("claude-haiku-4-5", candidates)).toBe(false);
+    expect(webSearchModelIsRejected("openai", "gpt-5.6-luna", candidates)).toBe(false);
+    expect(webSearchModelIsRejected("anthropic", "claude-haiku-4-5", candidates)).toBe(false);
+    expect(webSearchModelIsRejected("openai", "claude-haiku-4-5", candidates)).toBe(true);
   });
 });
 
@@ -74,11 +75,14 @@ describe("option list", () => {
   test("persisted now-illegal model is display-grandfathered; new writes still rejected", async () => {
     usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
     managementRows = [{ provider: "openai", id: "gpt-5.6-terra", disabled: false, native: true }];
-    const cfg = config({ webSearchSidecar: { model: "legacy-model" } });
+    const cfg = config({ webSearchSidecar: { backend: "anthropic", model: "legacy-model" } });
     const candidates = await webSearchCandidateRows(cfg);
     const options = webSearchModelOptionsFrom(cfg, candidates);
-    expect(options.map(o => o.value)).toContain("legacy-model");
-    expect(webSearchModelIsRejected("legacy-model", candidates)).toBe(true);
+    expect(options.find(o => o.value === "legacy-model")).toMatchObject({
+      backend: "anthropic",
+      model: "legacy-model",
+    });
+    expect(webSearchModelIsRejected("anthropic", "legacy-model", candidates)).toBe(true);
   });
 
   test("auth-slot options carry the slot flag; list is stably sorted", async () => {
@@ -88,7 +92,20 @@ describe("option list", () => {
     const cfg = config();
     const options = webSearchModelOptionsFrom(cfg, await webSearchCandidateRows(cfg));
     expect(options.map(o => o.value)).toEqual(["claude-haiku-4-5", "gpt-5.6-luna", "gpt-5.6-terra"]);
-    expect(options.find(o => o.value === "gpt-5.6-luna")?.authSlot).toBe(true);
+    expect(options.find(o => o.value === "gpt-5.6-luna")).toMatchObject({
+      authSlot: true,
+      backend: "openai",
+      model: "gpt-5.6-luna",
+    });
+    expect(options.find(o => o.value === "claude-haiku-4-5")).toMatchObject({
+      authSlot: true,
+      backend: "anthropic",
+      model: "claude-haiku-4-5",
+    });
+    expect(options.find(o => o.value === "gpt-5.6-terra")).toMatchObject({
+      backend: "openai",
+      model: "gpt-5.6-terra",
+    });
   });
 });
 
@@ -118,6 +135,37 @@ describe("HTTP contract on /api/sidecar-settings", () => {
     expect(cfg.webSearchSidecar?.model).toBeUndefined();
   });
 
+  test("PUT rejects a backend/model mismatch and does not persist it", async () => {
+    const cfg = config();
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "openai", model: "claude-haiku-4-5" } },
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain("backend/model pair");
+    expect(cfg.webSearchSidecar).toBeUndefined();
+  });
+
+  test("PUT validates a backend-only update against the preserved effective model", async () => {
+    const cfg = config({ webSearchSidecar: { backend: "anthropic", model: "claude-haiku-4-5" } });
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "openai" } },
+    });
+    expect(response.status).toBe(400);
+    expect(cfg.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-haiku-4-5" });
+  });
+
+  test("PUT persists the Anthropic auth-slot pair exactly as offered", async () => {
+    const cfg = config();
+    const response = await sidecarSettings(cfg, {
+      method: "PUT",
+      body: { webSearch: { backend: "anthropic", model: "claude-haiku-4-5" } },
+    });
+    expect(response.status).toBe(200);
+    expect(cfg.webSearchSidecar).toMatchObject({ backend: "anthropic", model: "claude-haiku-4-5" });
+  });
+
   test("PUT accepts a runnable candidate and ECHOES webSearchModels (GUI rebuilds from this body)", async () => {
     usableCodexAccounts.add(MAIN_CODEX_ACCOUNT_ID);
     managementRows = [{ provider: "openai", id: "gpt-5.6-terra", disabled: false, native: true }];
@@ -139,7 +187,7 @@ describe("HTTP contract on /api/sidecar-settings", () => {
 
   test("rejection body's allowedModels includes the always-legal auth slots", async () => {
     const candidates = await webSearchCandidateRows(config());
-    const rejection = webSearchModelRejection("webSearch.model", "o3-mini", candidates);
+    const rejection = webSearchModelRejection("webSearch.model", "openai", "o3-mini", candidates);
     expect(rejection.allowedModels).toContain("gpt-5.6-luna");
     expect(rejection.allowedModels).toContain("claude-haiku-4-5");
   });

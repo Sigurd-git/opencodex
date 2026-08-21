@@ -71,7 +71,19 @@ export interface SidecarSetting {
   timeoutMs?: number;
 }
 export interface VisionModelOption { value: string; label: string; backend: SidecarBackend; baseline?: boolean }
-export interface WebSearchModelOption { value: string; label: string; authSlot?: boolean }
+export interface WebSearchModelOption {
+  value: string;
+  label: string;
+  backend: SidecarBackend;
+  model: string;
+  authSlot?: boolean;
+}
+export interface WebSearchPickerOption {
+  value: string;
+  label: string;
+  backend?: SidecarBackend;
+  model?: string;
+}
 export interface SidecarData {
   webSearch: SidecarSetting;
   vision: SidecarSetting;
@@ -295,17 +307,33 @@ export function webSearchModelOptionsForPicker(
   serverOptions: WebSearchModelOption[] | undefined,
   models: ModelInfo[],
   current: string | undefined,
-): Array<{ value: string; label: string }> {
+  currentBackend?: SidecarBackend,
+): WebSearchPickerOption[] {
   if (serverOptions === undefined) {
-    const legacy = sidecarModelOptions(models);
+    const legacy: WebSearchPickerOption[] = sidecarModelOptions(models);
     if (current && !legacy.some(option => option.value === current)) {
-      legacy.unshift({ value: current, label: current });
+      legacy.unshift({
+        value: current,
+        label: current,
+        ...(currentBackend ? { backend: currentBackend } : {}),
+        model: current,
+      });
     }
     return legacy;
   }
-  const out = serverOptions.map(option => ({ value: option.value, label: option.label }));
+  const out: WebSearchPickerOption[] = serverOptions.map(option => ({
+    value: option.value,
+    label: option.label,
+    backend: option.backend,
+    model: option.model,
+  }));
   if (current && !out.some(option => option.value === current)) {
-    out.unshift({ value: current, label: current });
+    out.unshift({
+      value: current,
+      label: current,
+      ...(currentBackend ? { backend: currentBackend } : {}),
+      model: current,
+    });
   }
   return out;
 }
@@ -349,6 +377,19 @@ export function shadowCallModelOptions(models: ModelInfo[], current: string | un
 
 export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
   return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+}
+
+/** Server provenance wins; catalog inference supports only legacy option rows. */
+export function webSearchSidecarSelectionForModel(
+  models: ModelInfo[],
+  options: WebSearchPickerOption[],
+  modelId: string,
+): { backend: SidecarBackend; model: string } {
+  const option = options.find(entry => entry.value === modelId);
+  return {
+    backend: option?.backend ?? sidecarBackendForModel(models, modelId),
+    model: option?.model ?? modelId,
+  };
 }
 
 /** Server eligibility is authoritative; catalog inference only supports legacy picker entries. */

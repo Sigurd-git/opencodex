@@ -397,10 +397,17 @@ test("Claude sidecar overrides round-trip, partially update, clear, and reject u
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toContain("web-search sidecar candidate");
 
-    // Nested partial updates preserve omitted fields and omitted sections.
+    // A partial model update is validated against the effective preserved backend.
     response = await put({ webSearchSidecar: { model: "gpt-5.6-luna" } });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain("backend/model pair");
+    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ backend: "anthropic", model: "claude-haiku-4-5" });
+    expect(loadConfig().claudeCode?.visionSidecar).toEqual({ backend: "openai", model: "gpt-vision" });
+
+    // Updating both fields to a runnable pair succeeds and preserves omitted sections.
+    response = await put({ webSearchSidecar: { backend: "openai", model: "gpt-5.6-luna" } });
     expect(response.status).toBe(200);
-    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ backend: "anthropic", model: "gpt-5.6-luna" });
+    expect(loadConfig().claudeCode?.webSearchSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna" });
     expect(loadConfig().claudeCode?.visionSidecar).toEqual({ backend: "openai", model: "gpt-vision" });
 
     // null backend is the explicit Auto/inherit transition; empty model deletes only model.
