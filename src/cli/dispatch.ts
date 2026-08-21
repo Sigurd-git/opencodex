@@ -179,7 +179,7 @@ const commandRunners: Record<string, CommandRunner> = {
       const { printCodexLogGuardDoctor } = await import("./codex-log-guard-doctor");
       printCodexLogGuardDoctor();
     }
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   debug: async deps => {
     const { handleDebugCommand } = await import("./debug");

@@ -162,6 +162,18 @@ unreachable; and 64 for invalid arguments.
 
 ### `ocx doctor`
 
+Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
+installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
+and pending history migration. The Codex app-home targeting section also detects the narrow Windows
+Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
+diagnostic redact the OS username. The default report prints repair hints but does not apply them.
+
+The **OAuth reliability** section reports whether credential storage is writable, whether refresh
+single-flight/lock files can be created under `OPENCODEX_HOME`, non-healthy OAuth or Codex pool
+accounts (redacted ids) with a recovery `Action:`, and a static OK that the Codex forward path does
+not fabricate official-client metadata. Doctor never mutates credentials; only the explicit
+zero-byte coordinator recovery below applies a repair.
+
 The default report includes the native-write coordinator state and exact path using immutable
 read-only SQLite inspection. Zero-byte, empty-unversioned, and rowless states are shown separately
 from catalog/app-server health, so a successful catalog refresh is not mistaken for successful
@@ -179,17 +191,6 @@ The recovery accepts only a proven zero-byte remnant. It refuses every non-empty
 changed, unsafe, or busy database and creates a same-directory `.zero-byte-backup-*` file instead
 of deleting anything. A file younger than one second intentionally remains coordinated; after
 stopping writers, use the explicit recovery above or wait one second before retrying `ocx sync`.
-
-Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
-installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,
-and pending history migration. The Codex app-home targeting section also detects the narrow Windows
-Orca runtime-home mismatch and explains service migration when applicable. Paths shown by this
-diagnostic redact the OS username. Doctor prints repair hints but does not apply them.
-
-The **OAuth reliability** section reports whether credential storage is writable, whether refresh
-single-flight/lock files can be created under `OPENCODEX_HOME`, non-healthy OAuth or Codex pool
-accounts (redacted ids) with a recovery `Action:`, and a static OK that the Codex forward path does
-not fabricate official-client metadata. Doctor never mutates credentials or applies repairs.
 
 ## Catalog sync
 

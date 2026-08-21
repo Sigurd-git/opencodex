@@ -124,6 +124,29 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 프로바이더와 모델 메타데이터에 따라 Codex의 `low | medium | high | xhigh | max | ultra` 단계를 사용하며,
 업스트림이 지원하지 않는 값은 요청을 보내기 전에 매핑하거나 지원 범위로 낮춥니다.
 
+### Coordinator 진단 및 복구
+
+네이티브 설정/기록 쓰기는 canonical `CODEX_HOME`을 키로 하는 사용자별 SQLite coordinator를 사용합니다.
+프로세스가 SQLite 초기 생성 구간에서 종료되면 권한 있는 transition row가 전혀 없는데도 제로 바이트
+coordinator가 남을 수 있습니다. `ocx doctor`는 SQLite sidecar를 만들지 않고 정확한 coordinator 경로를
+보고하며, 제로 바이트, 미버전, row 없는 상태, 유효, 안전하지 않음, 읽을 수 없음 상태를 구분합니다.
+자동 sync는 identity가 안정되고 최소 1초 동안 유지되었으며 immutable SQLite snapshot의 version이 0이고
+table이 없는 제로 바이트 파일만 허용합니다. 새로 생성된 제로 바이트 파일은 잠긴 coordinator 경로에 남습니다.
+
+doctor가 제로 바이트 생성 잔여물이라고 증명한 상태라면 OpenCodex proxy/service를 중지하고 실행하세요.
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+복구는 동일한 제로 바이트 파일을 같은 디렉터리의 `.zero-byte-backup-*` 경로로 옮깁니다. 증거를 삭제하거나
+기존 routed 상태를 채택하지 않습니다. 실행 중인 proxy, lock 경합, symlink/reparse point, 다른 소유자,
+변경된 파일, 모든 비어 있지 않은 database, 이미 권한 있는 row가 있는 coordinator는 거절합니다. 파일이
+생성된 지 1초 미만이면 sync는 의도적으로 계속 coordinated 상태로 취급합니다. writer를 중지하고 명시적인
+복구를 사용하거나 1초를 기다린 다음 `ocx sync`를 다시 실행하세요. Desktop renderer 필터링은 별도 계층이므로,
+catalog와 coordinator가 올바르다는 사실만으로 Codex App model allowlist를 우회하지는 않습니다.
+
 ### 라우팅된 로컬 도구
 
 네이티브가 아닌 라우팅 catalog 항목은 `tool_mode: "code_mode_only"`를 사용합니다. 이를 통해 Codex는 공식

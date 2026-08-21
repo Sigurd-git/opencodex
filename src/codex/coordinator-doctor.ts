@@ -27,6 +27,8 @@ import {
 } from "./user-identity";
 import {
   CODEX_COORDINATOR_SCHEMA_VERSION,
+  errorCode,
+  isBusy,
   readCodexCoordinatorState,
 } from "./transition-state";
 
@@ -58,12 +60,6 @@ export type CodexCoordinatorDiagnostic =
 export type CodexCoordinatorRecoveryResult =
   | { ok: true; backupPath: string }
   | { ok: false; reason: string };
-
-function errorCode(error: unknown): string {
-  return error && typeof error === "object" && "code" in error
-    ? String((error as { code?: unknown }).code)
-    : "";
-}
 
 function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev
@@ -330,9 +326,12 @@ export function recoverZeroByteCodexCoordinator(now = new Date()): CodexCoordina
     return { ok: true, backupPath };
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    const busy = errorCode(cause) === "SQLITE_BUSY" || errorCode(cause) === "SQLITE_LOCKED"
-      || /database (?:is|table is) locked/i.test(message);
-    return { ok: false, reason: busy ? "the coordinator is busy; stop active sync/service writers and retry" : message };
+    return {
+      ok: false,
+      reason: isBusy(cause)
+        ? "the coordinator is busy; stop active sync/service writers and retry"
+        : message,
+    };
   } finally {
     if (transactionOpen) {
       try { database?.exec("ROLLBACK"); } catch { /* close releases the lock */ }

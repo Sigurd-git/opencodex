@@ -134,6 +134,19 @@ Codex には、ディスク上のカタログ (デフォルトでは `$CODEX_HOM
 プロバイダーとモデルメタデータに応じて Codex の `low | medium | high | xhigh | max | ultra` 段階を使い、
 上流がサポートしない値はリクエスト送信前にマッピングまたはサポート範囲に下げます。
 
+### Coordinator の診断と回復
+
+ネイティブ構成/履歴の書き込みは、canonical `CODEX_HOME` をキーとするユーザー単位の SQLite coordinator を使います。プロセスが SQLite の初期作成中に終了すると、権威ある transition row が存在しなくてもゼロバイトの coordinator が残ることがあります。`ocx doctor` は SQLite sidecar を作らずに正確な coordinator パスを報告し、ゼロバイト、未バージョン、row なし、有効、安全でない、読み取り不能の状態を区別します。自動 sync が許容するのは、identity が安定して 1 秒以上経過し、immutable SQLite snapshot の version が 0 で table がないゼロバイトファイルだけです。新しく作成されたゼロバイトファイルはロックされた coordinator パスに残ります。
+
+doctor がゼロバイトの作成残骸だと証明した場合は、OpenCodex proxy/service を停止して実行します。
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+回復は、同一性が保たれたゼロバイトファイルを同じディレクトリの `.zero-byte-backup-*` へ移動します。証拠を削除したり、既存の routed state を採用したりしません。実行中の proxy、lock 競合、symlink/reparse point、別所有者、変更済みファイル、空でない database、権威ある row を既に持つ coordinator は拒否します。ファイルが作成から 1 秒未満なら、sync は意図的に coordinator 扱いを続けます。writer を停止して明示的な回復を使うか、1 秒待ってから `ocx sync` を再実行してください。Desktop renderer のフィルタリングは別レイヤーであり、catalog と coordinator が正しいだけでは Codex App の model allowlist を回避できません。
+
 ### ルーティングされたローカルツール
 
 ネイティブではないルーティング済みカタログ項目は `tool_mode: "code_mode_only"` を使用します。これにより、

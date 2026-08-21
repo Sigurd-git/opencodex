@@ -129,9 +129,20 @@ ocx status --json
 
 ### `ocx doctor`
 
-运行只读的环境与连通性诊断：状态路径和文件系统类型、WSL 双重安装、代理环境/配置、ChatGPT 可达性、Codex 插件和项目配置警告，以及待处理的历史迁移。Codex app-home 定位部分也会检测狭义的 Windows Orca 运行时 home 不匹配，并在适用时解释服务迁移。此诊断展示的路径会对操作系统用户名进行脱敏。Doctor 会输出修复提示，但不会自动应用。
+运行只读的环境与连通性诊断：状态路径和文件系统类型、WSL 双重安装、代理环境/配置、ChatGPT 可达性、Codex 插件和项目配置警告，以及待处理的历史迁移。Codex app-home 定位部分也会检测狭义的 Windows Orca 运行时 home 不匹配，并在适用时解释服务迁移。此诊断展示的路径会对操作系统用户名进行脱敏。默认报告会输出修复提示，但不会自动应用。
 
-**OAuth 可靠性** 部分会报告凭据存储是否可写、是否能够在 `OPENCODEX_HOME` 下创建刷新 single-flight/锁文件、不健康的 OAuth 或 Codex 池账户（脱敏 ID）及其恢复 `Action:`，并给出一条静态 OK，说明 Codex 转发路径不会伪造官方客户端元数据。Doctor 绝不会修改凭据或执行修复。
+**OAuth 可靠性** 部分会报告凭据存储是否可写、是否能够在 `OPENCODEX_HOME` 下创建刷新 single-flight/锁文件、不健康的 OAuth 或 Codex 池账户（脱敏 ID）及其恢复 `Action:`，并给出一条静态 OK，说明 Codex 转发路径不会伪造官方客户端元数据。Doctor 绝不会修改凭据；只有下面显式的零字节 coordinator 恢复会执行修复。
+
+默认报告会通过 immutable 只读 SQLite 检查显示 native-write coordinator 的状态和准确路径。零字节、空的未版本化状态以及无行状态会与 catalog/app-server 健康状况分开显示，避免把 catalog 刷新成功误认为 Codex 配置注入成功。
+
+停止 OpenCodex proxy/service 后，显式保存并移走已证明不含权威状态的 coordinator，然后重试 sync：
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+恢复只接受已证明的零字节残留。任何非空、有效、未知、已变化、不安全或正忙的数据库都会被拒绝；它不会删除文件，而是在同一目录创建 `.zero-byte-backup-*` 文件。创建时间不足一秒的文件会被故意继续视为 coordinated；停止 writer 后使用上述显式恢复，或等待一秒再重试 `ocx sync`。
 
 ## 目录同步
 

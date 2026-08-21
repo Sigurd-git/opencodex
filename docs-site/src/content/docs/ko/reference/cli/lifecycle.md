@@ -166,12 +166,30 @@ probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `fa
 환경/설정, ChatGPT 도달 가능성, Codex 플러그인 및 프로젝트 설정 경고, 보류 중인 기록 마이그레이션이
 포함됩니다. Codex 앱 홈 대상 지정 섹션은 좁은 범위의 Windows Orca 런타임 홈 불일치도 감지하고,
 해당할 때 서비스 마이그레이션을 설명합니다. 이 진단에 표시되는 경로는 OS 사용자 이름을 마스킹합니다.
-doctor는 복구 힌트를 보여 주지만 직접 적용하지는 않습니다.
+기본 보고서는 복구 힌트를 보여 주지만 직접 적용하지는 않습니다.
 
 **OAuth 안정성** 섹션은 자격 증명 저장소에 쓰기 가능한지, `OPENCODEX_HOME` 아래에 refresh
 single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또는 Codex pool 계정(마스킹된 ID)과
 복구용 `Action:`, 그리고 Codex 전달 경로가 공식 클라이언트 메타데이터를 꾸며 내지 않는다는
-정적 OK를 보고합니다. doctor는 자격 증명을 변경하거나 복구를 적용하지 않습니다.
+정적 OK를 보고합니다. doctor는 자격 증명을 변경하지 않으며, 아래의 명시적인 제로 바이트
+coordinator 복구만 실제 복구 작업을 수행합니다.
+
+기본 보고서는 immutable 읽기 전용 SQLite 검사로 네이티브 쓰기 coordinator의 상태와 정확한 경로를
+보여 줍니다. 제로 바이트, 비어 있는 미버전, row 없는 상태를 catalog/app-server 상태와 구분하므로,
+catalog 갱신 성공을 Codex 설정 주입 성공으로 오해하지 않게 합니다.
+
+OpenCodex proxy/service를 중지한 뒤, 권한 있는 상태가 아님이 증명된 coordinator를 명시적으로 보존하여
+옮기고 sync를 다시 실행합니다.
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+복구는 증명된 제로 바이트 잔여 파일만 허용합니다. 비어 있지 않거나 유효하거나 알 수 없거나 변경되었거나
+안전하지 않거나 사용 중인 데이터베이스는 모두 거절하고, 삭제하지 않고 같은 디렉터리에
+`.zero-byte-backup-*` 파일을 만듭니다. 생성된 지 1초 미만인 파일은 의도적으로 coordinator 상태를 유지합니다.
+writer를 중지한 뒤 위의 명시적 복구를 사용하거나 1초를 기다린 다음 `ocx sync`를 다시 실행하세요.
 
 ## 카탈로그 동기화
 

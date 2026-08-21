@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { Database } from "bun:sqlite";
 
@@ -48,6 +48,13 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     rmSync(`${coordinatorPath}${suffix}`, { force: true });
+  }
+  const locksDir = dirname(coordinatorPath);
+  const backupPrefix = `${basename(coordinatorPath)}.zero-byte-backup-`;
+  if (existsSync(locksDir)) {
+    for (const entry of readdirSync(locksDir)) {
+      if (entry.startsWith(backupPrefix)) rmSync(join(locksDir, entry), { force: true });
+    }
   }
   rmSync(codexHome, { recursive: true, force: true });
   rmSync(opencodexHome, { recursive: true, force: true });
@@ -122,8 +129,10 @@ test("doctor distinguishes unversioned, rowless, and authoritative coordinators"
 });
 
 test("doctor inspection is immutable and refuses sidecars, unsafe modes, and symlinks", () => {
-  privateFile(coordinatorPath);
-  expect(inspectCodexCoordinator().kind).toBe("zero-byte");
+  const transaction = openCodexCoordinatorTransaction(coordinatorPath);
+  transaction.commit();
+  transaction.close();
+  expect(inspectCodexCoordinator().kind).toBe("ready");
   for (const suffix of ["-journal", "-wal", "-shm"]) {
     expect(existsSync(`${coordinatorPath}${suffix}`)).toBe(false);
   }
@@ -147,20 +156,30 @@ test("doctor inspection is immutable and refuses sidecars, unsafe modes, and sym
   }
 });
 
-test("recovery refuses a zero-byte coordinator with an active SQLite writer sidecar", () => {
+test("recovery refuses a zero-byte coordinator held by an active SQLite writer", () => {
   privateFile(coordinatorPath);
   const holder = new Database(coordinatorPath, { readwrite: true, create: false });
-  holder.exec("PRAGMA journal_mode = OFF; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+  holder.exec("PRAGMA journal_mode = MEMORY; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
   try {
     expect(recoverZeroByteCodexCoordinator()).toMatchObject({
       ok: false,
-      reason: expect.stringContaining("active SQLite journal sidecar"),
+      reason: "the coordinator is busy; stop active sync/service writers and retry",
     });
     expect(existsSync(coordinatorPath)).toBe(true);
   } finally {
     holder.exec("ROLLBACK");
     holder.close();
   }
+});
+
+test("recovery refuses a zero-byte coordinator with an active SQLite journal sidecar", () => {
+  privateFile(coordinatorPath);
+  privateFile(`${coordinatorPath}-journal`, "active");
+  expect(recoverZeroByteCodexCoordinator()).toEqual({
+    ok: false,
+    reason: "coordinator state is unsafe: the coordinator has an active SQLite journal sidecar",
+  });
+  expect(existsSync(coordinatorPath)).toBe(true);
 });
 
 test("zero-byte residue uses the legacy boundary while clean homes still initialize", () => {

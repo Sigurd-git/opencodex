@@ -181,6 +181,27 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 档位；上游不支持的值会在发送请求前完成
 映射或下调。
 
+### Coordinator 诊断与恢复
+
+原生配置/历史记录写入使用一个按用户划分、以 canonical `CODEX_HOME` 为键的 SQLite coordinator。
+如果进程在 SQLite 初始创建窗口中退出，可能会留下不含任何权威 transition row 的零字节 coordinator。
+`ocx doctor` 会在不创建 SQLite sidecar 的情况下报告准确的 coordinator 路径，并区分零字节、未版本化、
+无行、有效、不安全和不可读状态。自动 sync 只容忍 identity 稳定至少一秒，并且 immutable SQLite snapshot
+的 version 为 0、没有 table 的零字节文件；刚创建的零字节文件仍会留在受锁保护的 coordinator 路径上。
+
+如果 doctor 证明某状态是零字节创建残留，请停止 OpenCodex proxy/service 后运行：
+
+```bash
+ocx doctor --recover-zero-byte-coordinator --yes
+ocx sync
+```
+
+恢复会把仍保持相同 identity 的零字节文件移动到同一目录下的 `.zero-byte-backup-*` 路径；它不会删除证据，
+也不会采用旧的 routed state。运行中的 proxy、锁竞争、symlink/reparse point、其他所有者、已变化的文件、
+任何非空数据库，以及已经包含权威 row 的 coordinator 都会被拒绝。如果文件创建不足一秒，sync 会故意继续
+把它视为 coordinated；停止 writer 后使用显式恢复，或等待一秒再重试 `ocx sync`。Desktop renderer 过滤属于
+独立层：catalog 和 coordinator 正确本身并不能绕过 Codex App 的 model allowlist。
+
 ### 路由模型的本地工具
 
 非原生的路由 catalog 条目使用 `tool_mode: "code_mode_only"`。这样 Codex 可以公开其官方 `exec` 入口以及
