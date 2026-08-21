@@ -203,7 +203,7 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       && (requestedBackend === undefined || candidate.backend === requestedBackend));
     if (option) {
       settings.model = option.model;
-      settings.backend = option.backend;
+      if (backend !== "-") settings.backend = option.backend;
     }
   }
   const body = section === "web" ? { webSearch: settings } : { vision: settings };

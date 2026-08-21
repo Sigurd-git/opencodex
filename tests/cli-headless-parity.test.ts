@@ -89,6 +89,40 @@ describe("ocx agent sidecar --list (#2188)", () => {
     }
   });
 
+  test("web --model preserves an explicit backend clear", async () => {
+    const { requests, deps } = fakeRuntime((req, body) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+        return {
+          webSearchModels: [
+            { value: "gpt-5.6-luna", label: "gpt-5.6-luna", model: "gpt-5.6-luna", backend: "openai" },
+          ],
+          visionModels: [],
+        };
+      }
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return { ok: true, saved: body };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand([
+        "sidecar", "web", "--model", "gpt-5.6-luna", "--backend", "-",
+      ], deps)).toBe(0);
+      expect(requests).toEqual([
+        { path: "/api/sidecar-settings", method: "GET", body: null },
+        {
+          path: "/api/sidecar-settings",
+          method: "PUT",
+          body: { webSearch: { model: "gpt-5.6-luna", backend: null } },
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   test("web --model surfaces the server's backend/model pair rejection", async () => {
     const { requests, deps } = fakeRuntime(req => {
       const url = new URL(req.url);
