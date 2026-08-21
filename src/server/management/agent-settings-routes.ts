@@ -1071,8 +1071,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
       if (section.backend !== undefined && section.backend !== null
-        && section.backend !== "openai" && section.backend !== "anthropic") {
-        return jsonResponse({ error: `${field}.backend must be openai, anthropic, or null` }, 400);
+        && !["openai", "anthropic", "xai", "gemini", "exa"].includes(section.backend as string)) {
+        return jsonResponse({ error: `${field}.backend must be openai, anthropic, xai, gemini, exa, or null` }, 400);
       }
       if (section.model !== undefined && typeof section.model !== "string") {
         return jsonResponse({ error: `${field}.model must be a string` }, 400);
