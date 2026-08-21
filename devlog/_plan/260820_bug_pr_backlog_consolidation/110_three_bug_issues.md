@@ -28,7 +28,7 @@ it down: `devlog/_fin/260731_pr_issue_triage_round/050_windows_ci_flake_rca.md:1
 key on it, because Bun emits **both** `panic(thread 2852)` and `panic(main thread)` for the
 same failure, and names `Internal assertion failure` as the stable fingerprint. Probed:
 
-```
+```text
 MATCH   panic(thread 3960): Internal assertion failure
 MISS    panic(main thread): Internal assertion failure
 MISS    panic(main thread): PANIC: reached unreachable code
@@ -74,11 +74,14 @@ bridge arms its watchdog on adapter activity rather than socket activity, so a l
 payload was indistinguishable from a hung upstream. The `#2156` references were reworded to
 "found while investigating", and the closing keyword removed.
 
-**Second finding, fixed in the same PR.** Making the adapter emit one heartbeat per delta
-exposed that `guardTerminalEventStream` retained every nonterminal event in `seen`, which feeds
-both the continuation analysis and the rebuilt request. A large argument payload could grow it
-without bound wherever `terminalContinuationGuard` is on. The empty-completion guard already
-passes heartbeats through unretained; the terminal guard now matches it.
+**Second finding, partially addressed.** Making the adapter emit one heartbeat per delta
+exposed retention in `guardTerminalEventStream`'s `seen`, which feeds both the continuation
+analysis and the rebuilt request. Two event classes must be distinguished: #2180 stopped
+retaining `heartbeat` events, but the terminal guard still retains every OTHER nonterminal
+event (tool-call deltas included), so a large argument payload can still grow `seen` without
+bound wherever `terminalContinuationGuard` is on. The empty-completion guard passes heartbeats
+through unretained; matching it for the remaining nonterminal classes is follow-up work, not
+something this record's PR landed.
 
 **Why blocked rather than fixed.** The adapter is reporting truthfully: that stream really did
 end. What cannot be determined from here is why it ended for ocx and not for Pi direct.
@@ -100,4 +103,3 @@ At the branch tips, on `ssh lidge`:
 - #2178: `bun test` 13719 pass / 15 skip / 0 fail; `tests/ci-workflows.test.ts` 132 pass / 0 fail.
 - #2180: `bun test` 13722 pass / 15 skip / 0 fail; focused trio 112 pass / 0 fail.
 - `bun x tsc --noEmit` exit 0 and `bun run privacy:scan` passed on both.
-
