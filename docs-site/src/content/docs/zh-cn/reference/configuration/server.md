@@ -163,7 +163,7 @@ routed 重放会把主 ChatGPT 认证注入内部请求。Anthropic 后端使用
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 在可用时启用 | 图像描述总开关。 |
-| `backend?` | `"openai" \| "anthropic"` | auto | 与 web search 相同的显式优先、感知 Anthropic 凭据的选择方式。 |
+| `backend?` | `"openai" \| "anthropic"` | auto | 显式值优先；未设置时优先使用可用的已保存 Anthropic OAuth 凭据，否则使用 `openai`。 |
 | `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.4-mini`，Anthropic 使用 `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 推理强度；Anthropic 会忽略该项。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每个主轮次允许的新增描述缓存未命中次数。`0` 会禁用调用；无效值会使用默认值。 |
