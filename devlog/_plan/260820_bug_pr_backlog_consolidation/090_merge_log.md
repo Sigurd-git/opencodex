@@ -58,10 +58,20 @@ inherited from its branch point. The rebase removed them.
 | #2150 | `9a7801547` | #2127 @agentHits |
 | #2151 | `a584890f8` | #2075 @olddonkey |
 
-Verification that the rebased content is what actually landed: for each of the six PRs whose
-merge recorded a pre-rebase SHA, `git diff --name-only origin/dev <branch> -- <that PR's own
-src/ and tests/ files>` returns **0 differing files**. The merge took the branch content; only
-the recorded SHA was the older one.
+Verification that the rebased content is what actually landed, split by what is still
+re-runnable:
+
+- **Re-runnable today:** every merge SHA in the table above satisfies
+  `git merge-base --is-ancestor <sha> origin/dev` (verified 2026-08-21, 19/19 true) — the
+  recorded merge commits are exactly the commits on `dev`, so the landed content is the
+  table's content by construction.
+- **Historical assertion, no longer re-runnable:** six of the merges recorded a pre-rebase
+  branch SHA in their description. At merge time each rebased branch was compared with
+  `git diff --name-only origin/dev <branch> -- <that PR's own src/ and tests/ paths>` and
+  returned 0 differing files. The source branches were deleted in the wp0 cleanup
+  (260820 unit, executed record), so those comparisons cannot be reproduced from this log;
+  they stand as recorded assertions, not evidence, and the re-runnable ancestor check above
+  is the durable audit trail.
 
 ## Security surfaces, named rather than merged silently
 
@@ -107,4 +117,3 @@ Not done, and deliberately: no `scripts/release.ts`, no npm publish, no tag, no 
 
 **#2054** (@keepitmello) stays open by explicit instruction, carrying the wire-probe request.
 **#2167** (@ntdatt812) arrived after this campaign and is untriaged.
-
