@@ -21,12 +21,32 @@ pushes; the merge click itself is gated (MAINTAINERS.md).
   both PUT routes, teach sidecarBackendForModel the auth-slot rows.
 - #2211 (L5, CHANGES_REQUESTED): carry the L4 provenance field through the CLI
   contract — show backend in `web --list` human output and validate pairs on write.
-- #2238 (L6, CHANGES_REQUESTED): re-read latest review; fold with the L4 contract.
-- #2242 (L7, CHANGES_REQUESTED): re-read latest review; exact-origin pinning already
-  fixed; remaining items to fold.
+- #2238 (L6, CHANGES_REQUESTED, head a05f23fa9) — three reviewed blockers:
+  1. stripOpenAiOnlyWebSearchFields fires for every non-ChatGPT-forward Responses
+     provider; official OpenAI API-key traffic loses external_web_access /
+     search_context_size. Gate on xAI-specific provider identity/capability and add
+     a buildRequest regression proving OpenAI API-key tools retain both fields.
+  2. English config reference + CLI help still advertise only the old backend pair;
+     document the xai/gemini/exa arms as explicit-only/inert; keep translations
+     consistent.
+  3. exaApiKey only in SENSITIVE_KEY_PATTERN: add it to the shared colon/query/JSON
+     string-redaction grammar with all three canaries in tests/redact.test.ts.
+- #2242 (L7, CHANGES_REQUESTED, head 0f2d670c0) — five reviewed blockers:
+  1. runXaiWebSearch misses cancelBodyOnAbort after fetchWithResetRetry resolves
+     (abort-before-reader race).
+  2. parseXaiResponsesSSE must cancel the upstream body at the byte bound, not just
+     release the reader lock.
+  3. the management PUT mutates config.webSearchSidecar before xSearch validation
+     (400 after live state change) — stage and validate the complete candidate first.
+  4. malformed xSearch fields are silently omitted — reject invalid handle arrays,
+     dates, and enabled values instead of broadening the search with a 200.
+  5. public docs + the type comment still call xai inert; update the English source
+     and translations. Add no-partial-mutation and oversized-stream regressions.
 - #2243 (L8, CHANGES_REQUESTED): three runtime blockers per review + red macOS CI
   shard — full RCA in the phase B, fixes + rerun.
 - #2245 (L9): reviewer PASS locally; needs maintainer approval; one failing test shard
   reported on CI — reproduce, fix, re-push.
 
-Execution phase: wp9 (with wp8 covering the triage PRs per doc 110 order).
+Execution sequence (explicit — the wp numbers are not the order): wp9 (this doc,
+sidecar chain) -> wp8 (triage PRs per doc 110) -> wp11 (doc 130 switch) -> wp10
+(docs 140/150).

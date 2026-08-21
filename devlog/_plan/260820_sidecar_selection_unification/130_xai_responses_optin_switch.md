@@ -9,11 +9,12 @@ API key) of the same provider workspace.
 
 - Config truth: `modelAdapters` entries for grok-4.5 + grok-4.6 -> 'openai-responses'.
 - Atomic management API: extend the provider PATCH surface (provider-routes.ts:378 area
-  + gui provider-workspace DTO types.ts:88) with a single `xaiResponsesOptIn: boolean`
-  virtual field. Server-side it sets/clears BOTH grok model entries in one config
-  transaction, preserves unrelated modelAdapters overrides, normalizes partial/mixed
-  pre-existing state (one model set, one not -> switch reads 'mixed' and the first
-  write normalizes), and echoes the effective state in the response DTO.
+  + gui provider-workspace DTO types.ts:88) with a split write/read contract:
+  - WRITE (PATCH input): `xaiResponsesOptIn: boolean` — sets/clears BOTH grok model
+    entries in one config transaction, preserving unrelated modelAdapters overrides.
+  - READ (GET/echo DTO): `xaiResponsesOptInState: true | false | "mixed"` — partial
+    pre-existing state (one model set, one not) reads "mixed"; the first boolean
+    write normalizes both entries and the echo returns the effective state.
 - GUI: one switch rendered in both auth-mode sections; mixed state shows indeterminate.
 - Tier policy: the doc-100 unit already made the OAuth registry tier policy
   unconditional; the switch adds NO tier behavior. API-key route: opt-in flips wire
