@@ -162,7 +162,7 @@ Codex использует маленькие helper-model'и для задач 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Главный переключатель. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Явный выбор выигрывает; иначе usable stored Anthropic OAuth выбирает `anthropic`, затем `openai`. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Явный выбор имеет приоритет; без него всегда используется `openai`. `xai`, `gemini` и `exa` активируются только при явной настройке. |
 | `model?` | `string` | backend-dependent | `gpt-5.6-luna` для OpenAI или `claude-sonnet-5` для Anthropic. Старый явный `gpt-5.4-mini` мигрирует при старте. |
 | `reasoning?` | `string` | `low` | Effort sidecar'а. Значение `minimal` с web search отклоняется. |
 | `maxSearchesPerTurn?` | `number` | `3` | Число реальных поисков, разрешённых за один turn основной модели. |

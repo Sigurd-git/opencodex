@@ -133,7 +133,7 @@ Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | 주 스위치입니다. |
-| `backend?` | `"openai" \| "anthropic"` | auto | 명시값이 우선입니다. 그 외에는 사용 가능한 저장된 Anthropic OAuth가 있으면 `anthropic`을, 아니면 `openai`를 선택합니다. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 명시값이 우선이며, 미설정 시 항상 `openai`입니다. `xai`, `gemini`, `exa`는 명시적으로 설정한 경우에만 활성화됩니다. |
 | `model?` | `string` | backend-dependent | OpenAI는 `gpt-5.6-luna`, Anthropic은 `claude-sonnet-5`입니다. 레거시로 명시된 `gpt-5.4-mini`는 시작 시 마이그레이션됩니다. |
 | `reasoning?` | `string` | `low` | 사이드카 노력 수준입니다. `minimal`은 web search와 함께 거부됩니다. |
 | `maxSearchesPerTurn?` | `number` | `3` | 메인 모델 턴당 허용되는 실제 검색 수입니다. |

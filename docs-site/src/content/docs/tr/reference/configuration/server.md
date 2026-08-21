@@ -232,7 +232,7 @@ Images API yollarını ve yanıt şeklini uygulamalıdır.
 | Alan | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | kullanılabilir olduğunda açık | Ana anahtar. |
-| `backend?` | `"openai" \| "anthropic"` | auto | Açık olan kazanır; aksi takdirde kullanılabilir saklanan Anthropic OAuth `anthropic`'i, ardından `openai`'yi seçer. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Açık seçim kazanır; ayarlanmadığında her zaman `openai` kullanılır. `xai`, `gemini` ve `exa` yalnızca açıkça yapılandırıldığında etkinleşir. |
 | `model?` | `string` | arka uca bağlı | OpenAI için `gpt-5.6-luna` veya Anthropic için `claude-sonnet-5`. Eski açık `gpt-5.4-mini` başlangıçta geçirilir. |
 | `reasoning?` | `string` | `low` | Sidecar çabası. `minimal` web araması ile reddedilir. |
 | `maxSearchesPerTurn?` | `number` | `3` | Ana model turu başına izin verilen gerçek aramalar. |
@@ -273,4 +273,3 @@ sınırı tüketmez. Uzak `https:` görselleri ve başarısız veya boş açıkl
 
 Anthropic OAuth sidecar'ları opencodex'in mevcut Claude Code OAuth parmak izini
 yeniden kullanır. Hedeflenen hesap ve iş yükünü kapsamlı bir şekilde test edin.
-

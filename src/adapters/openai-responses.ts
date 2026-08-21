@@ -1377,14 +1377,14 @@ function stripUnsupportedHostedTools(body: unknown): unknown {
 }
 
 /**
- * OpenAI-only hosted web_search config fields that non-canonical Responses
- * upstreams reject wholesale. xAI's /v1/responses 400s the entire request on
+ * OpenAI hosted web_search config fields that a capability-classified Responses
+ * upstream may reject wholesale. xAI's /v1/responses 400s the entire request on
  * `external_web_access` and `search_context_size` ("Argument not supported"),
  * which killed every routed Grok turn whose client (Codex) attaches its
  * default web_search tool config (probe 2026-08-21: both fields 400
  * individually; `user_location` and `filters` are accepted and kept).
- * Canonical ChatGPT-forward traffic is untouched — this runs only on the
- * routed path, so the original behavior stays identical for OpenAI.
+ * The caller decides whether to apply this compatibility transform from explicit
+ * provider capability metadata; an unclassified upstream keeps the fields.
  */
 const OPENAI_ONLY_WEB_SEARCH_FIELDS = ["external_web_access", "search_context_size"] as const;
 export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
@@ -1595,10 +1595,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedToolSearchForUpstream(outBody);
         outBody = rewritten.body;
         convertedRoutedToolSearchNames = rewritten.names;
-        // Routed Responses upstreams reject OpenAI-only web_search config outright
-        // (xAI: HTTP 400 on the whole request). Strip only the two proven-fatal
-        // fields; the hosted tool itself passes through untouched.
-        outBody = stripOpenAiOnlyWebSearchFields(outBody);
+        // xAI rejects these OpenAI web_search extensions with HTTP 400. Keep them
+        // for OpenAI API-key traffic and unclassified gateways; only an explicit
+        // provider capability denial activates the compatibility transform.
+        if (provider.supportsOpenAiWebSearchToolFields === false) {
+          outBody = stripOpenAiOnlyWebSearchFields(outBody);
+        }
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const finalBody = stripDisabledReasoningSummaries(

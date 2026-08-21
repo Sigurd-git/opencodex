@@ -209,7 +209,7 @@ l'API Images d'OpenAI et la forme de réponse attendue par Codex.
 | Champ | Type | Par défaut | Signification |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | activé lorsqu'il est utilisable | Interrupteur principal. |
-| `backend?` | `"openai" \| "anthropic"` | automatique | Une valeur explicite est prioritaire ; sinon, la présence d'identifiants OAuth Anthropic stockés et utilisables sélectionne `anthropic`, puis `openai`. |
+| `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Une valeur explicite est prioritaire ; sans valeur, `openai` est toujours utilisé. `xai`, `gemini` et `exa` ne s'activent que s'ils sont configurés explicitement. |
 | `model?` | `string` | dépendant du backend | `gpt-5.6-luna` pour OpenAI ou `claude-sonnet-5` pour Anthropic. L'héritage explicite `gpt-5.4-mini` migre au démarrage. |
 | `reasoning?` | `string` | `low` | Effort secondaire. `minimal` est rejeté lors de la recherche sur le Web. |
 | `maxSearchesPerTurn?` | `number` | `3` | Recherches réelles autorisées par tour de modèle principal. |
