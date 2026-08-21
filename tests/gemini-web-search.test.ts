@@ -76,3 +76,95 @@ describe("planWebSearch gemini arm (L8)", () => {
     expect(findGeminiSidecarProvider(config())?.providerName).toBe("google-antigravity");
   });
 });
+
+import { runGeminiWebSearch } from "../src/web-search/gemini-executor";
+import * as oauthModule from "../src/oauth";
+mock.module("../src/oauth", () => ({
+  ...oauthModule,
+  getValidAccessTokenSnapshot: async () => ({ accessToken: "gem-token-abc", expiresAt: Date.now() + 3600_000 }),
+}));
+import { runWithWebSearch, type WebSearchLoopDeps } from "../src/web-search/loop";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import type { AdapterEvent, ProviderAdapter } from "../src/adapters/base";
+
+describe("runGeminiWebSearch request shape (review P1)", () => {
+  test("malicious baseUrl ignored: registry destination, manual redirect, bearer + IDE UA, full envelope, thinkingConfig", async () => {
+    accountSets = { "google-antigravity": { accounts: [{ id: "a1", credential: { projectId: "proj-9" } }], activeAccountId: "a1" } };
+    const captured: Array<{ url: string; init: RequestInit }> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push({ url: String(input instanceof Request ? input.url : input), init: init ?? {} });
+      return new Response(JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "ok" }] } }] } }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const evil: OcxProviderConfig = { adapter: "google", baseUrl: "https://evil.example/v1", authMode: "oauth" };
+      const out = await runGeminiWebSearch("q", "google-antigravity", evil, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000, describeImages: false });
+      expect(out.text).toBe("ok");
+      expect(captured).toHaveLength(1);
+      const req = captured[0]!;
+      expect(new URL(req.url).origin).toBe("https://daily-cloudcode-pa.googleapis.com");
+      expect(req.url).toContain("/v1internal:generateContent");
+      expect(req.init.redirect).toBe("manual");
+      const headers = req.init.headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer gem-token-abc");
+      expect(headers["User-Agent"]).toContain("antigravity");
+      const body = JSON.parse(String(req.init.body));
+      expect(body.project).toBe("proj-9");
+      expect(body.userAgent).toBe("antigravity");
+      expect(body.requestType).toBe("agent");
+      expect(body.request.tools).toEqual([{ google_search: {} }]);
+      expect(typeof body.request.sessionId).toBe("string");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("loop dispatch: gemini arm fails closed without a sidecar (review P1)", () => {
+  test("missing geminiSidecar yields the invariant error; forward executor and pool recorder untouched", async () => {
+    const firstPass: AdapterEvent[] = [
+      { type: "tool_call_start", id: "ws1", name: "web_search" },
+      { type: "tool_call_delta", arguments: "{\"query\":\"docs\"}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+    let pass = 0;
+    let sawToolResult = "";
+    const adapter: ProviderAdapter = {
+      name: "two-pass",
+      buildRequest: (parsed) => {
+        if (pass > 0) sawToolResult = JSON.stringify(parsed.context.messages ?? parsed);
+        return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("wire", { status: 200 }),
+      async *parseStream() {
+        const events = pass++ === 0 ? firstPass : [{ type: "text_delta", text: "answer" } as AdapterEvent, { type: "done" } as AdapterEvent];
+        for (const event of events) yield event;
+      },
+      async parseResponse() { throw new Error("unreachable"); },
+    };
+    const fetches: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => { fetches.push(String(input)); return new Response("{}", { status: 500 }); }) as typeof fetch;
+    let poolRecorded = 0;
+    try {
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter,
+        backend: "gemini",
+        hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer forward-secret" }),
+        settings: { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000, describeImages: false },
+        maxSearches: 1,
+        recordSidecarOutcome: () => { poolRecorded += 1; },
+        incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+      } satisfies WebSearchLoopDeps);
+      await new Response(response.body).text();
+      expect(fetches).toEqual([]);
+      expect(poolRecorded).toBe(0);
+      expect(sawToolResult).toContain("without a resolved Antigravity provider");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});

@@ -91,7 +91,7 @@ export async function runGeminiWebSearch(
   } catch (e) {
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     console.warn(`[web-search] gemini sidecar ${kind} (${Date.now() - t0}ms)`);
-    return { text: "", sources: [], error: e instanceof Error ? redactSecretString(e.message) : String(e) };
+    return { text: "", sources: [], error: redactSecretString(e instanceof Error ? e.message : String(e)) };
   } finally {
     sidecarExit();
     linkedSignal.cleanup();
