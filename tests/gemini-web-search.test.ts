@@ -114,6 +114,10 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
       expect(body.requestType).toBe("agent");
       expect(body.request.tools).toEqual([{ google_search: {} }]);
       expect(typeof body.request.sessionId).toBe("string");
+      // Effort mapping (L8 requirement): "low" on gemini-3.7-flash resolves to the
+      // tiered wire model with thinkingLevel "low" — both must reach the envelope.
+      expect(body.model).toBe("gemini-3.7-flash-tiered");
+      expect(body.request.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "low" } });
     } finally {
       globalThis.fetch = realFetch;
     }
