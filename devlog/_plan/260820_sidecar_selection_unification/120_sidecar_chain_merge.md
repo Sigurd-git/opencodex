@@ -50,3 +50,31 @@ pushes; the merge click itself is gated (MAINTAINERS.md).
 Execution sequence (explicit — the wp numbers are not the order): wp9 (this doc,
 sidecar chain) -> wp8 (triage PRs per doc 110) -> wp11 (doc 130 switch) -> wp10
 (docs 140/150).
+
+## Execution record (wp9 B-phase, 260821)
+
+Every recorded blocker resolved and pushed; Ingwannu re-review re-requested on all
+six layers. Worker lanes ran in parallel worktrees under .tmp/ (four sol-medium
+subagents + one direct fix):
+
+- #2203 d505dacc7 — cleanup doc recast as an executed historical record; corrected
+  36-ref remote list (merge-loop-closeout excluded); 5-step preflight template.
+- #2209 98eaba601 — options carry (backend, model) pairs; both PUT routes validate
+  effective pairs; auth-slot Anthropic persists anthropic/claude-haiku-4-5.
+  Suites 50/0 + 30/0, GUI 9/0, gate 13/0.
+- #2211 84357bd2b (parent merge) + 2a610909f — backend-tagged `web --list`,
+  provenance-aware pair writes, clear rejection errors. CLI suites 401/0.
+- #2238 19376f737 — strip gated on supportsOpenAiWebSearchToolFields:false (xAI
+  registry declares it; OpenAI API-key traffic keeps both fields — regression red
+  pre-fix); docs/CLI-help union across 8 locales; exaApiKey in the shared
+  colon/query/JSON redaction grammar, 3 canaries (JSON canary red pre-fix).
+- #2242 b2c2054b5 — cancelBodyOnAbort after resolve; byte-bound upstream body
+  cancel; staged atomic PUT validation (no-partial-mutation); malformed xSearch
+  rejected with 400; docs/type-comment de-inerted. 47/0 + 12/0.
+- #2243 249cc91a3 — atomic token/project snapshot; post-header abort guard;
+  bounded 64KiB UTF-8 JSON reads. 4 regressions red pre-fix; 50/0, privacy green.
+
+Remaining before merge clicks: Ingwannu approvals + green required CI per layer
+(#2245's earlier shard failure not reproduced at the current head — checks green
+except queued/pending reruns). Lidge full suite relaunched at stack top
+(/tmp/ocx-gate-stack.log) as the lagging indicator.
