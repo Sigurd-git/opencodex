@@ -20,10 +20,13 @@ ocx agent subagents set ark/model-a,openai/gpt-5.5
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows
 (picker-visible rows plus the login-entitled Luna/Haiku auth slots, intersected with executor
-availability for web search, minus provably text-only models for vision). Writes through
-`--model` go to the same management route as the GUI and are subject to the same per-sidecar
-gate: web search refuses a model outside the listed set (closed membership), while vision
-refuses only a model provably unable to see (unknown ids stay writable).
+availability for web search, minus provably text-only models for vision). Human-readable lists
+show each model's backend in brackets. A web-search `--model` write resolves that server-offered
+row and persists its backend and model together, so switching to an Anthropic option cannot keep
+an OpenAI backend (or vice versa). Writes go to the same management route as the GUI and are
+subject to the same per-sidecar gate: web search refuses a backend/model pair outside the listed
+set (closed membership), while vision refuses only a model provably unable to see (unknown ids
+stay writable).
 
 ```bash
 ocx agent sidecar web --list

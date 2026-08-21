@@ -20,8 +20,8 @@ describe("ocx agent sidecar --list (#2188)", () => {
       if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
         return {
           webSearchModels: [
-            { value: "gpt-5.6-luna", label: "gpt-5.6-luna", authSlot: true },
-            { value: "gpt-5.6-terra", label: "gpt-5.6-terra" },
+            { value: "gpt-5.6-luna", label: "gpt-5.6-luna", model: "gpt-5.6-luna", backend: "openai", authSlot: true },
+            { value: "gpt-5.6-terra", label: "gpt-5.6-terra", model: "gpt-5.6-terra", backend: "openai" },
           ],
           visionModels: [],
         };
@@ -37,8 +37,8 @@ describe("ocx agent sidecar --list (#2188)", () => {
       expect(requests[0]!.method).toBe("GET");
       expect(requests[0]!.path).toBe("/api/sidecar-settings");
       const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
-      expect(out).toContain("gpt-5.6-luna (auth slot)");
-      expect(out).toContain("gpt-5.6-terra");
+      expect(out).toContain("gpt-5.6-luna [openai] (auth slot)");
+      expect(out).toContain("gpt-5.6-terra [openai]");
     } finally {
       logSpy.mockRestore();
     }
@@ -51,6 +51,67 @@ describe("ocx agent sidecar --list (#2188)", () => {
       const code = await handleAgentCommand(["sidecar", "web", "--list", "--model", "x"], deps);
       expect(code).toBe(2);
       expect(requests).toHaveLength(0);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("web --model persists the exact backend/model pair offered by the server", async () => {
+    const { requests, deps } = fakeRuntime((req, body) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
+        return {
+          webSearch: { model: "gpt-5.6-luna", backend: "openai" },
+          webSearchModels: [
+            { value: "claude-haiku-4-5", label: "claude-haiku-4-5", model: "claude-haiku-4-5", backend: "anthropic", authSlot: true },
+          ],
+          visionModels: [],
+        };
+      }
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return { ok: true, saved: body };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--model", "claude-haiku-4-5"], deps)).toBe(0);
+      expect(requests).toEqual([
+        { path: "/api/sidecar-settings", method: "GET", body: null },
+        {
+          path: "/api/sidecar-settings",
+          method: "PUT",
+          body: { webSearch: { model: "claude-haiku-4-5", backend: "anthropic" } },
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("web --model surfaces the server's backend/model pair rejection", async () => {
+    const { requests, deps } = fakeRuntime(req => {
+      const url = new URL(req.url);
+      if (req.method === "GET") {
+        return {
+          webSearchModels: [
+            { value: "claude-haiku-4-5", label: "claude-haiku-4-5", model: "claude-haiku-4-5", backend: "anthropic" },
+          ],
+          visionModels: [],
+        };
+      }
+      if (req.method === "PUT") {
+        return Response.json({ error: 'webSearch.model: backend/model pair "anthropic/claude-haiku-4-5" is not a web-search sidecar candidate' }, { status: 400 });
+      }
+      return undefined;
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--model", "claude-haiku-4-5"], deps)).toBe(1);
+      expect(requests.map(request => request.method)).toEqual(["GET", "PUT"]);
+      expect(errorSpy.mock.calls.map(call => String(call[0])).join("\n")).toContain(
+        'backend/model pair "anthropic/claude-haiku-4-5"',
+      );
     } finally {
       errorSpy.mockRestore();
     }
@@ -93,6 +154,7 @@ function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
       const body = req.method === "GET" ? null : await req.json().catch(() => null);
       requests.push({ path: `${url.pathname}${url.search}`, method: req.method, body });
       const custom = responder?.(req, body);
+      if (custom instanceof Response) return custom;
       if (custom !== undefined) return Response.json(custom);
       return Response.json({ ok: true });
     },

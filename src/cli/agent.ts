@@ -13,6 +13,13 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 
+interface WebSearchModelOption {
+  value: string;
+  model: string;
+  backend: "openai" | "anthropic";
+  authSlot?: boolean;
+}
+
 const USAGE = `Usage:
   ocx agent [status] [--json]
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
@@ -159,14 +166,14 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (wantsList) {
     rejectArgs(args, USAGE);
     const settings = await runtimeRequest("/api/sidecar-settings", {}, deps) as {
-      webSearchModels?: Array<{ value: string; authSlot?: boolean }>;
+      webSearchModels?: WebSearchModelOption[];
       visionModels?: Array<{ value: string; backend?: string; baseline?: boolean }>;
     };
     if (section === "web") {
       const options = settings.webSearchModels ?? [];
       printData(options, wantsJson, options.length === 0
         ? ["no runnable web-search sidecar models (log in to ChatGPT or Anthropic)"]
-        : options.map(option => `${option.value}${option.authSlot ? " (auth slot)" : ""}`));
+        : options.map(option => `${option.value} [${option.backend}]${option.authSlot ? " (auth slot)" : ""}`));
     } else {
       const options = settings.visionModels ?? [];
       printData(options, wantsJson, options.length === 0
@@ -186,6 +193,19 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (reasoning !== undefined) settings.reasoning = reasoning;
   if (maxDescriptionsPerTurn !== undefined) settings.maxDescriptionsPerTurn = maxDescriptionsPerTurn;
   if (Object.keys(settings).length === 0) throw new CliUsageError("at least one sidecar option is required", USAGE);
+  if (section === "web" && model !== undefined && model !== "-") {
+    const offered = await runtimeRequest("/api/sidecar-settings", {}, deps) as {
+      webSearchModels?: WebSearchModelOption[];
+    };
+    const requestedBackend = backend === "-" ? "openai" : backend;
+    const option = offered.webSearchModels?.find(candidate =>
+      (candidate.value === model || candidate.model === model)
+      && (requestedBackend === undefined || candidate.backend === requestedBackend));
+    if (option) {
+      settings.model = option.model;
+      settings.backend = option.backend;
+    }
+  }
   const body = section === "web" ? { webSearch: settings } : { vision: settings };
   const result = await runtimeRequest("/api/sidecar-settings", { method: "PUT", body: JSON.stringify(body) }, deps);
   printData(result, wantsJson, [`${section} sidecar settings updated.`]);
