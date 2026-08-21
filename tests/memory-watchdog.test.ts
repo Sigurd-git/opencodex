@@ -166,6 +166,33 @@ describe("startMemoryWatchdog", () => {
     first.stop(); // already superseded — must not null out `second`
     expect(getActiveMemoryWatchdog()).toBe(second);
   });
+
+  test("injected samples with JSC counters round-trip through snapshot()", async () => {
+    let t = 0;
+    const wd = startMemoryWatchdog({
+      intervalMs: 1,
+      now: () => ++t,
+      sample: () => ({ ...sampleAt(t, 10), jscHeapSize: 111, jscExtraMemorySize: 222 }),
+      warn: () => {},
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const snap = wd.snapshot();
+    expect(snap.samples.length).toBeGreaterThan(0);
+    expect(snap.samples[0]!.jscHeapSize).toBe(111);
+    expect(snap.samples[0]!.jscExtraMemorySize).toBe(222);
+  });
+
+  test("default sampler records JSC heap counters under Bun (1.4 extraMemorySize visibility)", async () => {
+    const wd = startMemoryWatchdog({ intervalMs: 1, warn: () => {} });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const snap = wd.snapshot();
+    expect(snap.samples.length).toBeGreaterThan(0);
+    const s = snap.samples[snap.samples.length - 1]!;
+    // bun test always runs under Bun, so bun:jsc introspection is available.
+    expect(typeof s.jscHeapSize).toBe("number");
+    expect(s.jscHeapSize!).toBeGreaterThan(0);
+    expect(typeof s.jscExtraMemorySize).toBe("number");
+  });
 });
 
 describe("GET /api/system/memory", () => {
@@ -186,7 +213,7 @@ describe("GET /api/system/memory", () => {
 	    const body = await res!.json() as {
 	      pid: number; bunVersion: string; platform: string; rss: number;
 	      heapUsed: number; external: number; arrayBuffers: number; observedBytes: number; observedMetric: string;
-	      jscHeap: { heapSize: number } | null;
+	      jscHeap: { heapSize: number; extraMemorySize: number } | null;
 	      responseState: {
 	        count: number; residentCount: number; spillStubCount: number; tombstoneCount: number;
 	        totalBytes: number; spillPayloadBytes: number; largestBytes: number; oldestAgeMs: number;
@@ -210,6 +237,7 @@ describe("GET /api/system/memory", () => {
 	    expect(body.observedBytes).toBeGreaterThan(0);
 	    expect(["rss", "external", "arrayBuffers"]).toContain(body.observedMetric);
 	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
+	    expect(typeof body.jscHeap?.extraMemorySize).toBe("number");
     // responseState is a scalar-only continuation-store attribution block: every field is a
     // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
     // The exact count is pinned on purpose: a new field must be reviewed for privacy safety

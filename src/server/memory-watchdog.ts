@@ -13,6 +13,8 @@
  * paths, hostnames, or tokens.
  */
 
+import { heapStats } from "bun:jsc";
+
 export type MemorySampleBase = {
   /** Epoch ms. */
   at: number;
@@ -26,6 +28,10 @@ export type MemorySampleBase = {
   external: number;
   /** ArrayBuffer memory tracked by process.memoryUsage(). */
   arrayBuffers: number;
+  /** JSC heapStats().heapSize, when introspection is available. */
+  jscHeapSize?: number;
+  /** JSC heapStats().extraMemorySize — JSC-visible native memory (Bun 1.4 external-memory reporting). */
+  jscExtraMemorySize?: number;
 };
 
 export type MemorySample = MemorySampleBase & {
@@ -78,6 +84,15 @@ export function getActiveMemoryWatchdog(): MemoryWatchdog | null {
 
 function defaultSample(now: () => number): MemorySample {
   const usage = process.memoryUsage();
+  let jscHeapSize: number | undefined;
+  let jscExtraMemorySize: number | undefined;
+  try {
+    const stats = heapStats();
+    jscHeapSize = stats.heapSize;
+    jscExtraMemorySize = typeof stats.extraMemorySize === "number" ? stats.extraMemorySize : undefined;
+  } catch {
+    /* introspection failure must never break sampling */
+  }
   const base = {
     at: now(),
     rss: usage.rss,
@@ -85,6 +100,8 @@ function defaultSample(now: () => number): MemorySample {
     heapTotal: usage.heapTotal,
     external: usage.external,
     arrayBuffers: usage.arrayBuffers,
+    jscHeapSize,
+    jscExtraMemorySize,
   };
   return { ...base, ...observedMemoryCounter(base) };
 }
