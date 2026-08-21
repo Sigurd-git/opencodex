@@ -1,0 +1,152 @@
+{
+  "smoke": false,
+  "bunVersion": "1.4.0",
+  "bunRevision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+  "platform": "darwin",
+  "arch": "arm64",
+  "at": "2026-08-21T16:02:06.458Z",
+  "runs": 3,
+  "loadTurns": 30,
+  "events": 200,
+  "eventBytes": 65536,
+  "results": [
+    {
+      "kind": "rss",
+      "arm": "control",
+      "runIndex": 0,
+      "smoke": false,
+      "rssAfterLoad": 305037312,
+      "rssPlus5s": 305086464,
+      "rssPlus60s": 304791552,
+      "gcDurationMs": null,
+      "recoveredByPlus60s": 245760
+    },
+    {
+      "kind": "rss",
+      "arm": "gc",
+      "runIndex": 0,
+      "smoke": false,
+      "rssAfterLoad": 330563584,
+      "rssPlus5s": 330711040,
+      "rssPlus60s": 330596352,
+      "gcDurationMs": 4.067541,
+      "recoveredByPlus60s": -32768
+    },
+    {
+      "kind": "latency",
+      "arm": "control",
+      "runIndex": 0,
+      "smoke": false,
+      "probeTurns": 20,
+      "p50Ms": 75.82177049999154,
+      "p99Ms": 79.6427512700003,
+      "maxMs": 79.90070800000103,
+      "gcDurationMs": null,
+      "rssNonNormative": 354353152
+    },
+    {
+      "kind": "latency",
+      "arm": "gc",
+      "runIndex": 0,
+      "smoke": false,
+      "probeTurns": 20,
+      "p50Ms": 76.33122900000308,
+      "p99Ms": 81.13658803999365,
+      "maxMs": 81.63145899999654,
+      "gcDurationMs": 4.23,
+      "rssNonNormative": 330596352
+    },
+    {
+      "kind": "rss",
+      "arm": "control",
+      "runIndex": 1,
+      "smoke": false,
+      "rssAfterLoad": 302235648,
+      "rssPlus5s": 302301184,
+      "rssPlus60s": 302006272,
+      "gcDurationMs": null,
+      "recoveredByPlus60s": 229376
+    },
+    {
+      "kind": "rss",
+      "arm": "gc",
+      "runIndex": 1,
+      "smoke": false,
+      "rssAfterLoad": 316375040,
+      "rssPlus5s": 316522496,
+      "rssPlus60s": 316243968,
+      "gcDurationMs": 4.252875,
+      "recoveredByPlus60s": 131072
+    },
+    {
+      "kind": "latency",
+      "arm": "control",
+      "runIndex": 1,
+      "smoke": false,
+      "probeTurns": 20,
+      "p50Ms": 76.29347899998538,
+      "p99Ms": 79.48590976999724,
+      "maxMs": 79.50983399999677,
+      "gcDurationMs": null,
+      "rssNonNormative": 324976640
+    },
+    {
+      "kind": "latency",
+      "arm": "gc",
+      "runIndex": 1,
+      "smoke": false,
+      "probeTurns": 20,
+      "p50Ms": 75.3432090000133,
+      "p99Ms": 78.32939928999403,
+      "maxMs": 78.33808399998816,
+      "gcDurationMs": 4.057542,
+      "rssNonNormative": 334856192
+    },
+    {
+      "kind": "rss",
+      "arm": "control",
+      "runIndex": 2,
+      "smoke": false,
+      "rssAfterLoad": 354811904,
+      "rssPlus5s": 354877440,
+      "rssPlus60s": 354549760,
+      "gcDurationMs": null,
+      "recoveredByPlus60s": 262144
+    },
+    {
+      "kind": "rss",
+      "arm": "gc",
+      "runIndex": 2,
+      "smoke": false,
+      "rssAfterLoad": 311148544,
+      "rssPlus5s": 311279616,
+      "rssPlus60s": 311001088,
+      "gcDurationMs": 3.892,
+      "recoveredByPlus60s": 147456
+    },
+    {
+      "kind": "latency",
+      "arm": "control",
+      "runIndex": 2,
+      "smoke": false,
+      "probeTurns": 20,
+      "p50Ms": 75.67283349999343,
+      "p99Ms": 79.54803673004673,
+      "maxMs": 79.55712500005029,
+      "gcDurationMs": null,
+      "rssNonNormative": 342310912
+    },
+    {
+      "kind": "latency",
+      "arm": "gc",
+      "runIndex": 2,
+      "smoke": false,
+      "probeTurns": 20,
+      "p50Ms": 75.90585399998236,
+      "p99Ms": 79.18780874996737,
+      "maxMs": 79.45112499996321,
+      "gcDurationMs": 3.921584,
+      "rssNonNormative": 375390208
+    }
+  ]
+}

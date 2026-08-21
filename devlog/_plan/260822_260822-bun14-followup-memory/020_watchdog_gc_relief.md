@@ -99,3 +99,41 @@ attached — goalplan c3 satisfied by construction.
 
 
 
+
+## Phase A verdict (2026-08-22): FAIL — Phase B not implemented
+
+Real runs (smoke:false), 3 fresh-process runs per arm per cell type, Bun 1.4.0
+darwin/arm64 on BOTH hosts (local dev Mac + macmini-cf). Evidence:
+evidence/gc-eval-local-darwin-arm64.json, evidence/gc-eval-macmini-darwin-arm64.json.
+
+### Criterion (a): ≥50% of post-load RSS growth gone by +60s after one GC
+
+| host | arm | rssAfterLoad (3 runs) | recoveredByPlus60s (3 runs) |
+|---|---|---|---|
+| macmini-cf | control | 305.0 / 302.2 / 354.8 MB | +0.25 / +0.23 / +0.26 MB |
+| macmini-cf | gc | 330.6 / 316.4 / 311.1 MB | −0.03 / +0.13 / +0.15 MB |
+| local | control | 329.1 / 304.1 / 325.9 MB | +0.21 / +0.23 / +0.23 MB |
+| local | gc | 332.5 / 324.1 / 334.1 MB | +0.13 / +0.11 / +0.10 MB |
+
+GC recovery is indistinguishable from control idle drift (<0.1% of load-height
+RSS on every run; the GC arm recovered LESS than control on 4 of 6 runs).
+Bun 1.4's shared-allocator Bun.gc(true) does NOT return the post-load RSS
+plateau on darwin — same qualitative result as the 1.3.x finding that produced
+the 260731 gate. Criterion (a) FAIL, decisively, on both hosts.
+
+### Criterion (c): latency (informational, gate already failed)
+
+GC pause (child-reported): 3.9–4.6 ms across all runs. Probe p99 deltas within
+noise (macmini 79.6→81.1/78.3/79.2 ms; local one outlier 84.1 vs 69.8 ms
+control). No acceptance computed — (a) already fails the gate.
+
+### Consequence
+
+- The 260731 ban on production threshold/idle Bun.gc(true) STANDS on Bun 1.4.
+- Phase B (config-gated watchdog relief, idle gate, lastReliefAt, wiring chain)
+  is NOT implemented. The design remains in this doc for a future Bun release
+  that changes allocator page-return behavior; re-run this harness first.
+- The RSS plateau after SSE load is allocator page retention, not JS-heap
+  garbage — consistent with the 260731 analysis; process recycling remains the
+  operational lever.
+
