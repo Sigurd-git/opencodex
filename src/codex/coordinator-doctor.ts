@@ -303,8 +303,18 @@ export function recoverZeroByteCodexCoordinator(now = new Date()): CodexCoordina
     database.close();
     database = undefined;
 
-    const finalEntry = inspectTarget(observed.path);
-    if (finalEntry.kind !== "file" || !sameIdentity(lockedEntry.identity, finalEntry.identity)) {
+    // Windows cannot rename this SQLite file while the locking handle remains
+    // open. Re-prove the complete recoverable state after releasing that handle,
+    // immediately before the move: pathname identity alone would miss a writer
+    // that populated schema state during this unavoidable unlocked window.
+    const finalDiagnostic = inspectCodexCoordinatorPath(observed.path);
+    if (finalDiagnostic.kind !== "zero-byte") {
+      if (finalDiagnostic.kind === "unsafe" || finalDiagnostic.kind === "unreadable") {
+        return { ok: false, reason: `the coordinator changed before the backup move: ${finalDiagnostic.reason}` };
+      }
+      return { ok: false, reason: `the coordinator changed before the backup move: state is ${finalDiagnostic.kind}` };
+    }
+    if (!sameNodeAndSize(lockedEntry.identity, finalDiagnostic.identity)) {
       return { ok: false, reason: "the coordinator changed before the backup move" };
     }
     const backupPath = `${observed.path}.zero-byte-backup-${backupTimestamp(now)}`;
@@ -314,7 +324,7 @@ export function recoverZeroByteCodexCoordinator(now = new Date()): CodexCoordina
     // The rename itself can advance ctime, so post-move verification uses the
     // stable filesystem object and byte size. The full timestamp identity was
     // already revalidated immediately before rename while the source existed.
-    if (backupEntry.kind !== "file" || !sameNodeAndSize(finalEntry.identity, backupEntry.identity) || existsSync(observed.path)) {
+    if (backupEntry.kind !== "file" || !sameNodeAndSize(finalDiagnostic.identity, backupEntry.identity) || existsSync(observed.path)) {
       return { ok: false, reason: "the coordinator backup move could not be verified" };
     }
     return { ok: true, backupPath };

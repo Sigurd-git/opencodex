@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import {
   collectPaths,
@@ -21,6 +21,10 @@ import {
 } from "../src/cli/doctor";
 import { collectOrcaCodexHomeDiagnostic } from "../src/codex/home";
 import { NativeProfileError } from "../src/codex/native-profile-types";
+import {
+  resolveCodexCoordinatorDatabasePath,
+  resolveEffectiveUserIdentity,
+} from "../src/codex/user-identity";
 import {
   LOCAL_MANAGEMENT_CAPABILITY_HEADER,
   LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
@@ -623,6 +627,124 @@ describe("service memory section (#314 WP4)", () => {
     // A two-manager conflict must be uninstalled first; repairService() refuses it.
     const conflict = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false, serviceInstalled: true, serviceConflict: true });
     expect(conflict).toContain("ocx service install");
+  });
+
+  describe("zero-byte coordinator recovery wiring", () => {
+    let previousCodexHome: string | undefined;
+    let previousOpencodexHome: string | undefined;
+
+    beforeEach(() => {
+      previousCodexHome = process.env.CODEX_HOME;
+      previousOpencodexHome = process.env.OPENCODEX_HOME;
+      rmSync(TEST_DIR, { recursive: true, force: true });
+      mkdirSync(TEST_CODEX_HOME, { recursive: true });
+      mkdirSync(TEST_OPENCODEX_HOME, { recursive: true });
+      process.env.CODEX_HOME = TEST_CODEX_HOME;
+      process.env.OPENCODEX_HOME = TEST_OPENCODEX_HOME;
+    });
+
+    afterEach(() => {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+      rmSync(TEST_DIR, { recursive: true, force: true });
+    });
+
+    const seedZeroByteCoordinator = (): string => {
+      const path = resolveCodexCoordinatorDatabasePath(
+        resolveEffectiveUserIdentity(),
+        realpathSync.native(TEST_CODEX_HOME),
+      );
+      writeFileSync(path, "");
+      if (process.platform !== "win32") chmodSync(path, 0o600);
+      return path;
+    };
+
+    const cleanCoordinatorArtifacts = (path: string): void => {
+      rmSync(path, { force: true });
+      const prefix = `${basename(path)}.zero-byte-backup-`;
+      for (const entry of readdirSync(dirname(path))) {
+        if (entry.startsWith(prefix)) rmSync(join(dirname(path), entry), { force: true });
+      }
+    };
+
+    const captureDoctor = async (args: string[]): Promise<{ lines: string[]; exitCode: number | undefined }> => {
+      const previousExitCode = process.exitCode;
+      const realLog = console.log;
+      const lines: string[] = [];
+      try {
+        process.exitCode = 0;
+        console.log = (...parts: unknown[]) => { lines.push(parts.join(" ")); };
+        await runDoctor(args);
+        return { lines, exitCode: process.exitCode };
+      } finally {
+        console.log = realLog;
+        process.exitCode = previousExitCode;
+      }
+    };
+
+    test("zero-byte recovery requires --yes before touching the coordinator", async () => {
+      const coordinatorPath = seedZeroByteCoordinator();
+      try {
+        const result = await captureDoctor(["--recover-zero-byte-coordinator"]);
+        expect(result.exitCode).toBe(1);
+        expect(result.lines.join("\n")).toContain("Recovery is explicit");
+        expect(existsSync(coordinatorPath)).toBe(true);
+      } finally {
+        cleanCoordinatorArtifacts(coordinatorPath);
+      }
+    });
+
+    test("zero-byte recovery refuses while an identity-valid proxy is live", async () => {
+      const coordinatorPath = seedZeroByteCoordinator();
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: () => Response.json({
+          service: "opencodex",
+          status: "ok",
+          version: "test",
+          uptime: 1,
+          pid: process.pid,
+        }),
+      });
+      try {
+        writeFileSync(join(TEST_OPENCODEX_HOME, "config.json"), JSON.stringify({
+          port: server.port,
+          hostname: "127.0.0.1",
+        }));
+        const result = await captureDoctor(["--recover-zero-byte-coordinator", "--yes"]);
+        expect(result.exitCode).toBe(1);
+        expect(result.lines.join("\n")).toContain("is still running");
+        expect(existsSync(coordinatorPath)).toBe(true);
+      } finally {
+        server.stop(true);
+        cleanCoordinatorArtifacts(coordinatorPath);
+      }
+    });
+
+    test("zero-byte recovery moves the proven file to a same-directory backup", async () => {
+      const coordinatorPath = seedZeroByteCoordinator();
+      const closedPort = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+      const port = closedPort.port;
+      closedPort.stop(true);
+      try {
+        writeFileSync(join(TEST_OPENCODEX_HOME, "config.json"), JSON.stringify({
+          port,
+          hostname: "127.0.0.1",
+        }));
+        const result = await captureDoctor(["--recover-zero-byte-coordinator", "--yes"]);
+        expect(result.exitCode).toBe(0);
+        expect(existsSync(coordinatorPath)).toBe(false);
+        const prefix = `${basename(coordinatorPath)}.zero-byte-backup-`;
+        const backups = readdirSync(dirname(coordinatorPath)).filter(entry => entry.startsWith(prefix));
+        expect(backups).toHaveLength(1);
+        expect(result.lines.join("\n")).toContain(join(dirname(coordinatorPath), backups[0]!));
+      } finally {
+        cleanCoordinatorArtifacts(coordinatorPath);
+      }
+    });
   });
 });
 

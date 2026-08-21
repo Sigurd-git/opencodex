@@ -760,6 +760,7 @@ export function formatCoordinatorDoctorLines(diagnostic: CodexCoordinatorDiagnos
         ...pathLine,
         ...evidenceLines,
         `       Action: stop the OpenCodex proxy/service, then run ocx doctor ${RECOVER_ZERO_BYTE_COORDINATOR_FLAG} --yes`,
+        "       Note: a file younger than 1 second stays coordinated; use explicit recovery after stopping writers, or wait 1 second and retry ocx sync.",
       ];
     case "unversioned-empty":
       return [

@@ -177,7 +177,8 @@ ocx sync
 
 The recovery accepts only a proven zero-byte remnant. It refuses every non-empty, valid, unknown,
 changed, unsafe, or busy database and creates a same-directory `.zero-byte-backup-*` file instead
-of deleting anything.
+of deleting anything. A file younger than one second intentionally remains coordinated; after
+stopping writers, use the explicit recovery above or wait one second before retrying `ocx sync`.
 
 Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
 installs, proxy environment/config, ChatGPT reachability, Codex plugin and project-config warnings,

@@ -90,8 +90,12 @@ coordinator with immutable read-only SQLite flags so diagnosis never creates WAL
 distinguishes absent, zero-byte, unversioned, rowless, valid, unsupported, changed, unsafe, and
 unreadable states and prints the exact path. Explicit recovery is available only after the proxy is
 stopped and only for a proven zero-byte state. The command revalidates the same private
-regular-file identity under a non-blocking SQLite write lock and moves it to a same-directory
-backup; it never deletes or auto-adopts legacy routed residue.
+regular-file identity under a non-blocking SQLite write lock, releases the handle for Windows
+rename compatibility, then immutably re-proves zero bytes, schema version zero, and no tables
+immediately before moving it to a same-directory backup. It never deletes or auto-adopts legacy
+routed residue. A lock refusal explicitly names concurrent sync/service writers; a file younger
+than one second remains coordinated, so the operator must use the guarded recovery after stopping
+writers or wait one second before retrying `ocx sync`.
 
 [Decision Log]
 - 목적과 의도: Recover a crashed zero-byte coordinator without mistaking SQLite's normal creation window for stale authority.

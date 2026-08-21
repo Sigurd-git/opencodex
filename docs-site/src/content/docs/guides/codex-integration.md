@@ -224,7 +224,9 @@ ocx sync
 Recovery moves the still-identical zero-byte file to a same-directory `.zero-byte-backup-*` path;
 it does not delete the evidence or adopt legacy routed state. It refuses a running proxy, lock
 contention, symlinks/reparse points, foreign ownership, changed files, every non-empty database,
-and any coordinator that already has an authoritative row. Desktop renderer filtering is a
+and any coordinator that already has an authoritative row. If the file is less than one second
+old, sync deliberately still treats it as coordinated; stop writers and use the explicit recovery,
+or wait one second before retrying `ocx sync`. Desktop renderer filtering is a
 separate layer: a correct catalog and coordinator do not by themselves bypass the Codex App model
 allowlist.
 

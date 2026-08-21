@@ -69,6 +69,9 @@ test("doctor classifies and explicitly backs up a stable zero-byte coordinator",
   expect(formatCoordinatorDoctorLines(diagnostic).join("\n")).toContain(
     "size: 0 bytes; user_version: 0",
   );
+  expect(formatCoordinatorDoctorLines(diagnostic).join("\n")).toContain(
+    "a file younger than 1 second stays coordinated",
+  );
 
   const recovered = recoverZeroByteCodexCoordinator(new Date("2026-08-21T12:00:00.000Z"));
   expect(recovered.ok).toBe(true);
