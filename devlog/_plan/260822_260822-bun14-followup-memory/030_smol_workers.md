@@ -43,3 +43,30 @@ unit.
 ## Measurement claim
 Local A/B is the primary evidence (host-independent fixtures); macmini optional.
 
+
+## A/B gate result (2026-08-22, local darwin/arm64, Bun 1.4.0)
+
+Harness: scripts/smol-worker-ab.ts — fresh child process per run,
+peak = Subprocess.resourceUsage().maxRSS, audited workload shape
+(100 MB row materialization + aggregate JSON serialization), 3 runs per arm.
+
+| arm | median elapsed | median maxRSS |
+|---|---|---|
+| smol off | 37.84 ms | 447,758,336 B |
+| smol on  | 38.72 ms | 447,807,488 B |
+
+completionSuccess: true; elapsedWithin25Pct: true; peakRssReduced: FALSE →
+**gate verdict: FAIL — smol flags are NOT landed.**
+
+Reading: for this allocation shape (large short-lived arrays + one aggregate
+string) the Small heap growth policy changes peak RSS by ~0.01% — the peak is
+dominated by the live data itself, which no GC policy can shrink. smol's
+documented benefit targets long-lived idle workers, not burst-allocation batch
+jobs. Honest outcome per the audited plan: production Worker call sites keep
+the full-size heap; the harness and this record are the deliverable.
+
+Measurement-integrity note: an earlier in-process sequential version of the
+harness produced a phantom smol win (contaminated baselines — allocator page
+retention across runs). The fresh-child-process isolation is the valid design;
+report.json carries the isolation note.
+
