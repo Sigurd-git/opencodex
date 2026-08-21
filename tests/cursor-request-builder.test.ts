@@ -1047,6 +1047,14 @@ describe("Cursor request builder", () => {
     });
     expect(missed.continuationMode).toBe("full-replay");
     expect(missed.checkpointInvalidationReason).toBe("expired");
+    expect(missed.checkpointBytes).toBeUndefined();
+
+    const refLess = createCursorRequest({
+      ...parsed,
+      _cursorConversationId: "cursor_stable",
+    });
+    expect(refLess.continuationMode).toBe("checkpoint");
+    expect(refLess.checkpointBytes).toEqual(checkpointBytes);
     clearCursorCheckpointsForTests();
   });
 
