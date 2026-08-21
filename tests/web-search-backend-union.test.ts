@@ -75,3 +75,29 @@ describe("management routes admit the union, reject strangers, and guard the exa
     expect(JSON.stringify(redacted)).toContain('"model":"m"');
   });
 });
+
+async function putClaudeCode(cfg: OcxConfig, body: Record<string, unknown>): Promise<Response> {
+  const url = new URL("http://localhost/api/claude-code");
+  const response = await handleManagementAPI(
+    new Request(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+    url, cfg,
+  );
+  if (!response) throw new Error("route did not handle PUT");
+  return response;
+}
+
+describe("claude-code overrides: union widened for web-search ONLY (review F1)", () => {
+  test("webSearchSidecar.backend xai accepted", async () => {
+    const cfg = config();
+    const response = await putClaudeCode(cfg, { webSearchSidecar: { backend: "xai" } });
+    expect(response.status).toBe(200);
+    expect(cfg.claudeCode?.webSearchSidecar?.backend).toBe("xai");
+  });
+
+  test("visionSidecar.backend xai rejected 400 (vision keeps the two-member contract)", async () => {
+    const cfg = config();
+    const response = await putClaudeCode(cfg, { visionSidecar: { backend: "xai" } });
+    expect(response.status).toBe(400);
+    expect(cfg.claudeCode?.visionSidecar).toBeUndefined();
+  });
+});
