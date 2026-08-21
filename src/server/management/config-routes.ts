@@ -76,6 +76,7 @@ import {
   webSearchModelOptionsFrom,
   webSearchModelRejection,
 } from "./web-search-sidecar-options";
+import { validateXaiSearchOptions } from "../../web-search/xai-executor";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
@@ -541,7 +542,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown };
+      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -644,6 +645,28 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (typeof body.webSearch.exaApiKey === "string") {
         if (body.webSearch.exaApiKey === "") delete config.webSearchSidecar.exaApiKey;
         else config.webSearchSidecar.exaApiKey = body.webSearch.exaApiKey;
+      }
+      // Opt-in x_search block (L7): null clears; an object is doc-validated before persisting.
+      if (body.webSearch.xSearch === null) delete config.webSearchSidecar.xSearch;
+      else if (isPlainRecord(body.webSearch.xSearch)) {
+        const x = body.webSearch.xSearch as Record<string, unknown>;
+        const lift = (v: unknown) => Array.isArray(v) && v.every(h => typeof h === "string") ? v as string[] : undefined;
+        const candidate = {
+          ...(x.enabled === true ? { enabled: true } : {}),
+          ...(lift(x.allowedXHandles) ? { allowedXHandles: lift(x.allowedXHandles) } : {}),
+          ...(lift(x.excludedXHandles) ? { excludedXHandles: lift(x.excludedXHandles) } : {}),
+          ...(typeof x.fromDate === "string" && x.fromDate !== "" ? { fromDate: x.fromDate } : {}),
+          ...(typeof x.toDate === "string" && x.toDate !== "" ? { toDate: x.toDate } : {}),
+        };
+        const invalid = validateXaiSearchOptions({
+          xSearch: candidate.enabled,
+          allowedXHandles: candidate.allowedXHandles,
+          excludedXHandles: candidate.excludedXHandles,
+          fromDate: candidate.fromDate,
+          toDate: candidate.toDate,
+        });
+        if (invalid) return jsonResponse({ error: `webSearch.xSearch invalid: ${invalid}` }, 400);
+        config.webSearchSidecar.xSearch = candidate;
       }
       if (typeof body.webSearch.streamRoutedModelOutput === "boolean") {
         // `false` is the default — drop the key so config files stay minimal.

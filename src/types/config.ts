@@ -805,6 +805,18 @@ export interface OcxWebSearchSidecarConfig {
    * and src/lib/redact.ts strips it from any logged structure or error string.
    */
   exaApiKey?: string;
+  /**
+   * Opt-in X (Twitter) search for the xai backend: adds the hosted x_search tool next to
+   * web_search. Limits are doc-validated at the management layer AND in the executor:
+   * handles <=20 per list, allow XOR exclude, ISO-8601 dates.
+   */
+  xSearch?: {
+    enabled?: boolean;
+    allowedXHandles?: string[];
+    excludedXHandles?: string[];
+    fromDate?: string;
+    toDate?: string;
+  };
   /** Reasoning effort for the sidecar — "minimal" (non-thinking) keeps it fast/cheap. */
   reasoning?: string;
   /** Max searches executed per main-model turn (loop guard). */
