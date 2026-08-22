@@ -108,3 +108,59 @@ test("the grid drops to one column before a card is too narrow for its control r
   expect(Number(floor![1])).toBeGreaterThanOrEqual(14);
 });
 
+test("the responsive axis is the card, not the viewport", async () => {
+  const css = withoutComments(await Bun.file(cssUrl).text());
+  const card = allRuleBodies(css, ".dash-sidecar-row-card");
+
+  // This grid is repeat(auto-fit, ...), so a 336px card exists inside a 992px window.
+  // A viewport media query on these cards fires at the wrong time or never.
+  expect(card).toContain("container-type: inline-size");
+  expect(card).toContain("container-name: sidecar-card");
+
+  // Wrong-axis guard: no @media block may target the sidecar cards.
+  for (const block of css.match(/@media[^{]*\{[\s\S]*?\n\}/g) ?? []) {
+    expect(block).not.toContain(".dash-sidecar-row-card");
+    expect(block).not.toContain(".dash-vision-sidecar-card");
+    expect(block).not.toContain(".dash-sidecar-copy");
+  }
+});
+
+test("container-query rules are specific enough to win the cascade", async () => {
+  const css = withoutComments(await Bun.file(cssUrl).text());
+  const queries = css.match(/@container[^{]*\{[\s\S]*?\n\}/g) ?? [];
+  expect(queries.length).toBeGreaterThan(0);
+
+  for (const query of queries) {
+    for (const match of query.matchAll(/\n\s{2}([^{@}]+)\{/g)) {
+      const selector = match[1].trim();
+      if (!/dash-sidecar-copy|dash-delegation-controls/.test(selector)) continue;
+      // A bare .dash-sidecar-copy is 0,1,0 and silently loses to the 0,2,0 base rules,
+      // leaving a query that reads as correct in review but does nothing.
+      for (const part of selector.split(",")) {
+        expect(part.split(".").length - 1).toBeGreaterThanOrEqual(2);
+      }
+    }
+  }
+});
+
+test("narrow-card rules apply to both cards, never one of them", async () => {
+  const css = withoutComments(await Bun.file(cssUrl).text());
+  const queries = css.match(/@container[^{]*\{[\s\S]*?\n\}/g) ?? [];
+
+  // Stacking one card's control group while the other keeps a different basis is the
+  // asymmetry that broke the shared baseline; it measured 1.19px when the 36rem query
+  // was vision-only.
+  for (const query of queries) {
+    for (const match of query.matchAll(/\n\s{2}([^{@}]+)\{([^}]*)\}/g)) {
+      const [, selector, body] = match;
+      if (!/flex-basis|align-items/.test(body)) continue;
+      if (!/dash-delegation-controls|dash-sidecar-copy/.test(selector)) continue;
+      // A vision-only selector may only carry vision-specific concerns (its select row),
+      // never the shared copy/control basis.
+      if (selector.includes("dash-vision-sidecar-card")) {
+        expect(selector).toContain("dash-vision-select-row");
+      }
+    }
+  }
+});
+
