@@ -88,7 +88,7 @@
    and `:last-child` would shrink its model picker too. `:nth-child(2)` only ever
    matches a real second control. */
 .dash-sidecar-row-card .dash-delegation-controls .custom-select:nth-child(2) {
-  min-width: 6.5rem;
+  min-width: min(100%, 6.5rem);
   max-width: 9rem;
 }
 
@@ -138,7 +138,10 @@
 /* The model select carries the long value: give it a floor wide enough to read a
    real model id, and ellipsize inside rather than growing without bound. */
 .dash-sidecar-row-card .dash-delegation-controls .custom-select:first-child {
-  min-width: 10.5rem;
+  /* `min()` so the floor can never exceed the box it is a floor for. A hard 10.5rem
+     pushed the control past the panel edge once the card fell under ~11.5rem — the
+     narrow end the container queries above now reach. */
+  min-width: min(100%, 10.5rem);
   max-width: 14rem;
 }
 
@@ -234,13 +237,13 @@
 
 .dash-vision-select-row .custom-select:first-child {
   flex: 1 1 70%;
-  min-width: 9rem;
+  min-width: min(100%, 9rem);
   max-width: 16rem;
 }
 
 .dash-vision-select-row .custom-select:nth-child(2) {
   flex: 1 1 30%;
-  min-width: 6rem;
+  min-width: min(100%, 6rem);
   max-width: 9rem;
 }
 
