@@ -97,13 +97,21 @@
   flex: 1 1 auto;
 }
 
-/* The hint must wrap inside its own column, never run under the controls. The
-   copy block is the flex item that yields, so it needs a real basis: without
-   one, `flex-basis: auto` lets its max-content width win the negotiation and the
-   text overlaps the control group in longer locales (ko/ru/ja). */
+/* The hint must wrap inside its own column, never run under the controls, so the copy
+   block needs a real basis AND a real floor.
+
+   With `flex: 1 1 0` and no floor its used width is whatever the control group leaves
+   over — which goes negative once the ko control row (168px select + 8 + ~108px label +
+   8 + 34px switch = 326px) exceeds the track. Copy then rendered 0px wide and
+   `overflow-wrap: anywhere` authorised a break after every CJK glyph: the title became a
+   one-character vertical stripe and the card grew from 157px to 618px. The 14rem floor
+   makes that state unreachable; `min()` keeps the floor from exceeding the card itself.
+   `break-word` still rescues an unbreakable token (a long model id) without shredding
+   prose. */
 .dash-sidecar-row-card .dash-sidecar-copy {
   flex: 1 1 0;
-  overflow-wrap: anywhere;
+  min-width: min(100%, 14rem);
+  overflow-wrap: break-word;
 }
 
 /* The copy block yields; the control group holds its intrinsic width. Letting the
@@ -115,6 +123,16 @@
 .dash-sidecar-row-card .dash-delegation-controls {
   flex: 0 0 auto;
   flex-wrap: nowrap;
+  /* Both control groups reserve the same band AND pack from its top, so the first Select
+     of each card lands on one line. Without the band the web-search group is one 34px
+     select row while the vision group is a 59px column (select row + 12px gap + the
+     "advanced" disclosure); without the top packing the shorter group centres inside that
+     band and its Select still sits 13.5px low.
+
+     `align-items`, not `align-content`: the web-search group is a single flex line, and
+     `align-content` has no effect on one line. */
+  min-height: 3.6875rem;
+  align-items: flex-start;
 }
 
 /* The model select carries the long value: give it a floor wide enough to read a
@@ -143,9 +161,28 @@
   min-width: 0;
 }
 
-.dash-vision-sidecar-card {
+/* BOTH cards wrap, and neither overrides the shared centre alignment.
+
+   Wrapping only the vision card put its control group on a second flex line while the
+   web-search group stayed on the first, so the two Selects sat ~16-30px apart at every
+   width. `align-items: flex-start` on one card made it worse for the same reason: the
+   two cards resolved their control groups against different rules. Symmetry is the fix —
+   both cards wrap, both keep the shared `center`, so both resolve identically and the
+   Selects share a baseline. */
+.dash-sidecar-row-card {
   flex-wrap: wrap;
-  align-items: flex-start;
+}
+
+/* Both cards wrap their control group onto a second line, so that line must start at the
+   same y in both. It does not by default: the copy blocks are different heights (the ko
+   hints are 30 vs 41 chars and wrap to a different line count in every locale), and each
+   card's control line simply follows its own copy. Reserving the same copy band in both
+   cards is what puts the two Selects on one line.
+
+   3.9375rem = 63px = 21px title + 3px hint margin + two 19.5px hint lines — the longest
+   shipped hint at the narrowest two-column card. */
+.dash-sidecar-row-card .dash-sidecar-copy {
+  min-height: 3.9375rem;
 }
 
 /* The shared sidecar copy rule is `flex: 1 1 0` so a one-row control group can
