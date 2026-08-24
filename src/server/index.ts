@@ -633,9 +633,19 @@ export function warnAgentTaskRecoveryStartup(config: {
   console.warn("   Recovered plaintext assignment data is retained only in a bounded, process-local in-memory cache; exact fidelity is not guaranteed and the path depends on undocumented backend behavior.");
 }
 
+export function warnPlaintextV2AgentMessagesStartup(config: {
+  plaintextV2AgentMessages?: boolean;
+}): void {
+  if (config.plaintextV2AgentMessages !== true) return;
+  console.warn("⚠️  Experimental plaintext V2 agent messages are enabled.");
+  console.warn("   Eligible new canonical ChatGPT v2 spawn_agent, send_message, and followup_task calls may carry message arguments without application-layer encryption; HTTPS transport encryption is unchanged.");
+  console.warn("   Message text may appear in Codex history, routed-provider requests, and local response/debug state. This depends on undocumented ChatGPT and Codex behavior and may stop working after a backend or client change.");
+}
+
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   const config = runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())));
+  warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);

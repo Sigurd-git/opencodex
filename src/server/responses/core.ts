@@ -366,6 +366,12 @@ import {
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
 import {
+  createPlaintextV2AgentMessageCallRestoreRewrite,
+  restorePlaintextV2AgentMessageCalls,
+  restorePlaintextV2AgentMessageCallsInJson,
+  shouldPreparePlaintextV2AgentMessages,
+} from "../../responses/plaintext-v2-agent-messages";
+import {
   collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
   collectProviderExecutedCallTypes,
@@ -2035,6 +2041,12 @@ async function applyFinalRouteRequestNormalization(args: {
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  parsed._plaintextV2AgentMessages = shouldPreparePlaintextV2AgentMessages({
+    enabled: config.plaintextV2AgentMessages === true,
+    inboundWire,
+    canonicalChatGpt: isCanonicalOpenAiForwardProvider(route.provider),
+    requestBody: parsed._rawBody,
+  });
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
@@ -3615,8 +3627,10 @@ async function handleResponsesInner(
   }
 
   let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();
-  const refreshRoutedNamespaceToolAliases = (builtRequest: AdapterRequest): void => {
+  let plaintextV2AgentMessageToolNames: ReadonlySet<string> = new Set();
+  const refreshRequestToolAliases = (builtRequest: AdapterRequest): void => {
     routedNamespaceToolAliases = builtRequest.convertedRoutedNamespaceToolAliases ?? new Map();
+    plaintextV2AgentMessageToolNames = builtRequest.plaintextV2AgentMessageToolNames ?? new Set();
   };
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
@@ -3704,7 +3718,7 @@ async function handleResponsesInner(
       // would incorrectly disable restoration for the exact ambiguous-name case the alias fixes.
       routedToolSearchNames.add(name);
     }
-    refreshRoutedNamespaceToolAliases(request);
+    refreshRequestToolAliases(request);
     // #1700: the bridged paths refuse a call to a tool the request never declared
     // (`declaredToolNames`, src/bridge.ts). The passthrough had no equivalent, so a routed
     // provider's top-level `apply_patch` — which under Codex code mode exists only as a nested
@@ -3841,12 +3855,19 @@ async function handleResponsesInner(
     const rememberPassthroughResponseChecked = rememberPassthroughResponse
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) => {
         if (inspectionSawUndeclaredTool) return;
-        const restoredResponse = restoreRoutedCustomCalls(
+        const customRestoredResponse = restoreRoutedCustomCalls(
           restoreAuthorizedBareNamespaceToolCalls(response),
           routedCustomToolNames,
           routedCustomToolRepairNames,
           declaredWireToolNames,
         ).value as { id?: unknown; output?: unknown; status?: unknown };
+        const plaintextRestore = plaintextV2AgentMessageToolNames.size > 0
+          ? restorePlaintextV2AgentMessageCalls(customRestoredResponse, plaintextV2AgentMessageToolNames)
+          : undefined;
+        // Keep the client response intact on structural overflow, but do not persist an
+        // internal namespace that a later turn (or a disabled option) could replay.
+        if (plaintextRestore?.overflowed) return;
+        const restoredResponse = (plaintextRestore?.value ?? customRestoredResponse) as typeof response;
         if (
           undeclaredToolGuardActive
           && undeclaredToolCallNameInResponse(
@@ -4053,7 +4074,7 @@ async function handleResponsesInner(
           headers: selectedForwardHeaders,
           translatorBudget,
         });
-        refreshRoutedNamespaceToolAliases(request);
+        refreshRequestToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       } catch (err) {
@@ -4271,7 +4292,7 @@ async function handleResponsesInner(
           headers: selectedForwardHeaders,
           translatorBudget,
         });
-        refreshRoutedNamespaceToolAliases(request);
+        refreshRequestToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       } catch (err) {
@@ -4452,7 +4473,7 @@ async function handleResponsesInner(
         if (retry.kind === "retried") {
           authCtx = retry.authCtx;
           request = retry.request;
-          refreshRoutedNamespaceToolAliases(request);
+          refreshRequestToolAliases(request);
           refreshUndeclaredToolGuard(request);
           upstreamResponse = retry.upstreamResponse;
           selectedForwardHeaders = retry.selectedForwardHeaders;
@@ -4681,6 +4702,13 @@ async function handleResponsesInner(
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(outboundRequestBody, translatorBudget)
           : undefined,
+        // Snapshot repair can copy tools/tool_choice from the outbound request. Restore
+        // this request-scoped alias after that copy and before the client guard runs.
+        plaintextV2AgentMessageToolNames.size > 0
+          ? payloadRewriteAsBlockRewrite(
+            createPlaintextV2AgentMessageCallRestoreRewrite(plaintextV2AgentMessageToolNames),
+          )
+          : undefined,
         createResponsesFieldBackfillBlockRewrite(),
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
@@ -4872,8 +4900,9 @@ async function handleResponsesInner(
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
       const clientJson = (() => {
+        const restoredImageGen = restoreImageGenCallsInJson(text, imageGenCallAliases);
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
-          restoreImageGenCallsInJson(text, imageGenCallAliases),
+          restoredImageGen,
           routedNamespaceToolAliases,
         );
         const restoredAuthorizedBareNamespace = restoreRoutedNamespaceCallsInJson(
@@ -4893,9 +4922,12 @@ async function handleResponsesInner(
         const repaired = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
           ? repairResponsesSnapshotJson(restoredToolSearch, outboundRequestBody)
           : restoredToolSearch;
+        const restoredPlaintextV2Namespace = plaintextV2AgentMessageToolNames.size > 0
+          ? restorePlaintextV2AgentMessageCallsInJson(repaired, plaintextV2AgentMessageToolNames)
+          : repaired;
         const modelRewritten = parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId
-          ? rewriteResponsesModelJson(backfillResponsesFieldsJson(repaired), parsed._responseModelId)
-          : backfillResponsesFieldsJson(repaired);
+          ? rewriteResponsesModelJson(backfillResponsesFieldsJson(restoredPlaintextV2Namespace), parsed._responseModelId)
+          : backfillResponsesFieldsJson(restoredPlaintextV2Namespace);
         // The bounded-JSON answer bypasses the SSE payload rewrite, so content-
         // channel reasoning needs the same normalization here for the plain
         // JSON answer and every reframed-SSE variant built from clientJson.
@@ -5677,7 +5709,7 @@ async function handleResponsesInner(
     Math.max(1, budget - transientSendsUsed);
   try {
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
-    refreshRoutedNamespaceToolAliases(initialRequest);
+    refreshRequestToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
     inputTokenEstimate = typeof initialRequest.usageLog?.inputTokens === "number"
@@ -5822,7 +5854,7 @@ async function handleResponsesInner(
         sameTargetParsed = parsed;
         sameTargetToken = transportToken;
       }
-      refreshRoutedNamespaceToolAliases(retryRequest);
+      refreshRequestToolAliases(retryRequest);
       const retryEstimate = typeof retryRequest.usageLog?.inputTokens === "number"
         ? retryRequest.usageLog.inputTokens
         : undefined;

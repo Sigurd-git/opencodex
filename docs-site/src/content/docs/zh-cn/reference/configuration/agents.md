@@ -21,6 +21,7 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 可用性探测缓存间隔。低于 1000 ms 的值会回退到默认值。 |
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
+| `plaintextV2AgentMessages?` | `boolean` | `false` | 实验性选项。启用后，opencodex 会尝试让符合条件的新 `spawn_agent`、`send_message` 和 `followup_task` 调用使用明文消息参数。详见[明文 v2 代理消息](#明文-v2-代理消息)。 |
 
 通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
@@ -69,6 +70,31 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
   "subagentEffortCap": "high"
 }
 ```
+
+## 明文 v2 代理消息
+
+`plaintextV2AgentMessages` 默认关闭。opencodex 只识别顶层 `collaboration` namespace，而且它必须直接包含
+`spawn_agent`。原生 ChatGPT 收到这类 v2 Responses 请求前，opencodex 会删除 `spawn_agent`、
+`send_message` 和 `followup_task` 中已有的 `parameters.properties.message.encrypted: true`。
+ChatGPT 会校验保留的 `collaboration` namespace，因此请求会临时使用一个私有名称。opencodex 在 JSON、
+SSE 和 WebSocket 响应中把名称改回 `collaboration`，并保留 `encrypted_function_args: []`，让兼容的
+Codex 客户端把参数识别为明文。
+
+这个选项不会增加恢复请求，也不会使用 `agentTaskRecovery` 在缓存未命中时产生的额外 ChatGPT
+配额。它只能影响新工具调用，不能修改已有密文。请求已占用私有名称或有冲突引用时，opencodex 会保持该请求不变；若它后来生成加密的路由子任务，单独启用的 `agentTaskRecovery` 仍可处理。ChatGPT 拒绝或忽略修改后的 schema，或 Codex 客户端不识别明文响应字段时，调用可能失败。opencodex 不会用原 schema 自动重发父请求，因为重发可能重复消耗配额或重复执行工具。
+
+成功改写后，这个选项会取消代理消息参数的应用层加密。HTTPS 仍会加密网络传输，但消息文字可能出现在 Codex
+任务历史、外部模型请求、`responses-state.json` 及其 spill 文件，以及启用调试记录时的
+`usage-debug.jsonl`。该行为依赖 ChatGPT 未公开的 schema 和响应字段，后端或客户端更新后可能失效。
+服务启动时会打印警告。
+
+```json
+{
+  "plaintextV2AgentMessages": true
+}
+```
+
+等价命令是 `ocx config set plaintextV2AgentMessages true`。修改后重启代理。
 
 ## Effort 上限
 

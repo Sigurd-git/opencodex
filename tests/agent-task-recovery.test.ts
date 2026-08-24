@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
-import { warnAgentTaskRecoveryStartup } from "../src/server";
+import { warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup } from "../src/server";
 import { resetAgentTaskRecoveryState } from "../src/server/responses/agent-task-recovery";
 import { agentTaskRecoveryWaiterCountForTests } from "../src/server/responses/agent-task-recovery-cache";
 import {
@@ -120,6 +120,28 @@ describe("agent task recovery (opt-in, default off)", () => {
       expect(warnings.join("\n")).toContain("Recovered plaintext assignment data");
       expect(warnings.join("\n")).toContain("process-local in-memory cache");
       expect(warnings.join("\n")).not.toContain(secret);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("warns about plaintext retention only for an explicit v2 message opt-in", () => {
+    const originalWarn = console.warn;
+    const capture = (enabled: boolean | undefined): string[] => {
+      const warnings: string[] = [];
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+      warnPlaintextV2AgentMessagesStartup({ plaintextV2AgentMessages: enabled });
+      return warnings;
+    };
+
+    try {
+      expect(capture(undefined)).toEqual([]);
+      expect(capture(false)).toEqual([]);
+      const warnings = capture(true);
+      expect(warnings).toHaveLength(3);
+      expect(warnings.join("\n")).toContain("Experimental plaintext V2 agent messages are enabled");
+      expect(warnings.join("\n")).toContain("HTTPS transport encryption is unchanged");
+      expect(warnings.join("\n")).toContain("local response/debug state");
     } finally {
       console.warn = originalWarn;
     }

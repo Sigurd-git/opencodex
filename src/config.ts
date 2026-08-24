@@ -1057,6 +1057,8 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // Invalid hand edits disable only this experimental plaintext path.
+  plaintextV2AgentMessages: z.boolean().optional().catch(undefined),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
@@ -1929,6 +1931,19 @@ function warnDegradedOptionalRemoteBlocks(rawParsed: unknown): void {
   }
 }
 
+function malformedPlaintextV2AgentMessagesWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "plaintextV2AgentMessages")) return null;
+  const enabled = raw.plaintextV2AgentMessages;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "plaintextV2AgentMessages ignored: expected a boolean";
+}
+
+function warnDegradedPlaintextV2AgentMessages(rawParsed: unknown): void {
+  const warning = malformedPlaintextV2AgentMessagesWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
 type NativeSubagentPersistedField = "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults";
 
 function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
@@ -2082,6 +2097,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
+      warnDegradedPlaintextV2AgentMessages(parsed);
       warnDegradedAgentTaskRecovery(parsed);
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
@@ -2108,6 +2124,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
+      warnDegradedPlaintextV2AgentMessages(parsed);
       warnDegradedAgentTaskRecovery(parsed);
       warnDegradedRuntimeRole(parsed);
       warnDegradedOptionalRemoteBlocks(parsed);
@@ -2130,6 +2147,7 @@ export function loadConfig(): OcxConfig {
         warnDegradedNativeSubagentConfig(parsed, config);
         warnDegradedCodexAccountPicker(parsed);
         warnDegradedUpstreamHostCircuitThreshold(parsed);
+        warnDegradedPlaintextV2AgentMessages(parsed);
         warnDegradedAgentTaskRecovery(parsed);
         warnDegradedRuntimeRole(parsed);
         warnDegradedOptionalRemoteBlocks(parsed);
@@ -2273,6 +2291,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (remoteGuiWarning) warnings.push(remoteGuiWarning);
   const clientWarning = malformedClientConnectionWarning(rawParsed);
   if (clientWarning) warnings.push(clientWarning);
+  const plaintextMessagesWarning = malformedPlaintextV2AgentMessagesWarning(rawParsed);
+  if (plaintextMessagesWarning) warnings.push(plaintextMessagesWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2409,6 +2429,14 @@ function clientRolePairError(value: unknown): string | null {
     return "schema_invalid: client connection requires runtimeRole client";
   }
   return null;
+}
+
+function plaintextV2AgentMessagesError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "plaintextV2AgentMessages")) return null;
+  const enabled = raw.plaintextV2AgentMessages;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: plaintextV2AgentMessages: must be a boolean or omitted";
 }
 
 /**
@@ -2568,6 +2596,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
+    ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)

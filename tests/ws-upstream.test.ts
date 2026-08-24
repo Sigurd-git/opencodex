@@ -288,6 +288,152 @@ describe("handleResponses Codex WS relay selection", () => {
     expect(text).toContain("data: [DONE]");
   });
 
+  test("plaintext v2 collaboration rewriting applies to WS requests and responses", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.created",
+          response: {
+            id: "r-plaintext-v2-ws",
+            object: "response",
+            status: "in_progress",
+            output: [],
+          },
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_spawn",
+            call_id: "call-spawn",
+            namespace: "collaboration-optimize",
+            name: "spawn_agent",
+            arguments: "",
+            encrypted_function_args: [],
+            status: "in_progress",
+          },
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "fc_spawn",
+          output_index: 0,
+          namespace: "collaboration-optimize",
+          name: "collaboration-optimize__spawn_agent",
+          arguments: JSON.stringify({ message: "plain WS assignment" }),
+          encrypted_function_args: [],
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_spawn",
+            call_id: "call-spawn",
+            namespace: "collaboration-optimize",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ message: "plain WS assignment" }),
+            encrypted_function_args: [],
+            status: "completed",
+          },
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "r-plaintext-v2-ws",
+            status: "completed",
+            output: [{
+              type: "function_call",
+              id: "fc_spawn",
+              call_id: "call-spawn",
+              namespace: "collaboration-optimize",
+              name: "spawn_agent",
+              arguments: JSON.stringify({ message: "plain WS assignment" }),
+              encrypted_function_args: [],
+              status: "completed",
+            }],
+          },
+        }),
+      });
+    });
+    const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+      body: JSON.stringify({
+        model: "gpt-5.6-luna",
+        stream: true,
+        input: [
+          {
+            type: "additional_tools",
+            tools: [{
+              type: "namespace",
+              name: "collaboration",
+              tools: [
+                {
+                  type: "function",
+                  name: "spawn_agent",
+                  parameters: {
+                    type: "object",
+                    properties: { message: { type: "string", encrypted: true } },
+                  },
+                },
+                { type: "function", name: "send_message", parameters: { type: "object" } },
+              ],
+            }],
+          },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "delegate" }] },
+        ],
+      }),
+    });
+
+    const response = await handleResponses(request, config, { model: "", provider: "" }, {
+      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const frame = JSON.parse(FakeWebSocket.instances[0]!.sent[0]!) as {
+      type: string;
+      stream?: unknown;
+      input: Array<Record<string, unknown>>;
+    };
+    const additionalTools = frame.input.find(item => item.type === "additional_tools") as {
+      tools: Array<{
+        name: string;
+        tools: Array<{ parameters: { properties: { message: Record<string, unknown> } } }>;
+      }>;
+    };
+    expect(frame.type).toBe("response.create");
+    expect(frame.stream).toBeUndefined();
+    expect(additionalTools.tools[0]!.name).toBe("collaboration-optimize");
+    expect(additionalTools.tools[0]!.tools[0]!.parameters.properties.message.encrypted).toBeUndefined();
+
+    expect(isEagerRelaySseResponse(response)).toBe(true);
+    const clientText = await response.text();
+    expect(clientText).toContain("response.function_call_arguments.done");
+    const argumentDoneLine = clientText.split("\n")
+      .find(line => line.includes('"response.function_call_arguments.done"'))!;
+    const argumentDone = JSON.parse(argumentDoneLine.replace(/^data: /, "")) as Record<string, unknown>;
+    expect(argumentDone.namespace).toBe("collaboration");
+    expect(argumentDone.name).toBe("collaboration__spawn_agent");
+    expect(argumentDone.encrypted_function_args).toEqual([]);
+    const completedLine = clientText.split("\n")
+      .find(line => line.includes('"response.completed"'))!;
+    const completed = JSON.parse(completedLine.replace(/^data: /, "")) as {
+      response: { output: Array<Record<string, unknown>> };
+    };
+    expect(completed.response.output[0]!.namespace).toBe("collaboration");
+    expect(completed.response.output[0]!.encrypted_function_args).toEqual([]);
+  });
+
   test("an HTTP fallback remains on the configured legacy tee path", async () => {
     installFake(ws => ws.close());
     globalThis.fetch = (async () => new Response(
