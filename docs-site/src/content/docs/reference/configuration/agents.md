@@ -127,11 +127,11 @@ fails instead of routing unreadable ciphertext elsewhere.
 recovery. On a v2 Responses request whose final destination is the canonical ChatGPT backend,
 opencodex recognizes the v2 catalog by a top-level `collaboration` namespace with a direct
 `spawn_agent` child. It removes `parameters.properties.message.encrypted: true`, when present, only
-from `spawn_agent`, `send_message`, and `followup_task`. Because ChatGPT reserves the
-`collaboration` namespace and rejects a modified schema under that name, the request uses a private
-namespace alias. OpenCodex restores `collaboration` in JSON, SSE, and WebSocket responses before
-Codex receives the tool call. The `encrypted_function_args: []` field is preserved so compatible
-Codex clients recognize the message as plaintext.
+from `spawn_agent`, `send_message`, and `followup_task`. ChatGPT reserves both the `collaboration`
+namespace and those three tool names, so the request uses fixed private aliases for all four
+identities. OpenCodex restores the original namespace and tool names in JSON, SSE, and WebSocket
+responses before Codex receives the tool call. The `encrypted_function_args: []` field is preserved
+so compatible Codex clients recognize the message as plaintext.
 
 This path adds no recovery request and therefore does not spend the extra ChatGPT quota used by a
 cache miss in `agentTaskRecovery`. It cannot change tasks that are already encrypted. If the request

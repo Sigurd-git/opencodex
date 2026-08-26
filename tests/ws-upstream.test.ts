@@ -311,7 +311,7 @@ describe("handleResponses Codex WS relay selection", () => {
             id: "fc_spawn",
             call_id: "call-spawn",
             namespace: "collaboration-optimize",
-            name: "spawn_agent",
+            name: "start_delegated_task",
             arguments: "",
             encrypted_function_args: [],
             status: "in_progress",
@@ -324,7 +324,7 @@ describe("handleResponses Codex WS relay selection", () => {
           item_id: "fc_spawn",
           output_index: 0,
           namespace: "collaboration-optimize",
-          name: "collaboration-optimize__spawn_agent",
+          name: "collaboration-optimize__start_delegated_task",
           arguments: JSON.stringify({ message: "plain WS assignment" }),
           encrypted_function_args: [],
         }),
@@ -338,7 +338,7 @@ describe("handleResponses Codex WS relay selection", () => {
             id: "fc_spawn",
             call_id: "call-spawn",
             namespace: "collaboration-optimize",
-            name: "spawn_agent",
+            name: "start_delegated_task",
             arguments: JSON.stringify({ message: "plain WS assignment" }),
             encrypted_function_args: [],
             status: "completed",
@@ -356,7 +356,7 @@ describe("handleResponses Codex WS relay selection", () => {
               id: "fc_spawn",
               call_id: "call-spawn",
               namespace: "collaboration-optimize",
-              name: "spawn_agent",
+              name: "start_delegated_task",
               arguments: JSON.stringify({ message: "plain WS assignment" }),
               encrypted_function_args: [],
               status: "completed",
@@ -408,12 +408,16 @@ describe("handleResponses Codex WS relay selection", () => {
     const additionalTools = frame.input.find(item => item.type === "additional_tools") as {
       tools: Array<{
         name: string;
-        tools: Array<{ parameters: { properties: { message: Record<string, unknown> } } }>;
+        tools: Array<{
+          name: string;
+          parameters: { properties: { message: Record<string, unknown> } };
+        }>;
       }>;
     };
     expect(frame.type).toBe("response.create");
     expect(frame.stream).toBeUndefined();
     expect(additionalTools.tools[0]!.name).toBe("collaboration-optimize");
+    expect(additionalTools.tools[0]!.tools[0]!.name).toBe("start_delegated_task");
     expect(additionalTools.tools[0]!.tools[0]!.parameters.properties.message.encrypted).toBeUndefined();
 
     expect(isEagerRelaySseResponse(response)).toBe(true);
@@ -431,6 +435,7 @@ describe("handleResponses Codex WS relay selection", () => {
       response: { output: Array<Record<string, unknown>> };
     };
     expect(completed.response.output[0]!.namespace).toBe("collaboration");
+    expect(completed.response.output[0]!.name).toBe("spawn_agent");
     expect(completed.response.output[0]!.encrypted_function_args).toEqual([]);
   });
 

@@ -76,9 +76,9 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 `plaintextV2AgentMessages` 默认关闭。opencodex 只识别顶层 `collaboration` namespace，而且它必须直接包含
 `spawn_agent`。原生 ChatGPT 收到这类 v2 Responses 请求前，opencodex 会删除 `spawn_agent`、
 `send_message` 和 `followup_task` 中已有的 `parameters.properties.message.encrypted: true`。
-ChatGPT 会校验保留的 `collaboration` namespace，因此请求会临时使用一个私有名称。opencodex 在 JSON、
-SSE 和 WebSocket 响应中把名称改回 `collaboration`，并保留 `encrypted_function_args: []`，让兼容的
-Codex 客户端把参数识别为明文。
+ChatGPT 会按保留的 `collaboration` namespace 和三个工具名处理消息，因此请求会给这四个名称使用固定的
+临时别名。opencodex 在 JSON、SSE 和 WebSocket 响应中恢复原名称，并保留
+`encrypted_function_args: []`，让兼容的 Codex 客户端把参数识别为明文。
 
 这个选项不会增加恢复请求，也不会使用 `agentTaskRecovery` 在缓存未命中时产生的额外 ChatGPT
 配额。它只能影响新工具调用，不能修改已有密文。请求已占用私有名称或有冲突引用时，opencodex 会保持该请求不变；若它后来生成加密的路由子任务，单独启用的 `agentTaskRecovery` 仍可处理。ChatGPT 拒绝或忽略修改后的 schema，或 Codex 客户端不识别明文响应字段时，调用可能失败。opencodex 不会用原 schema 自动重发父请求，因为重发可能重复消耗配额或重复执行工具。

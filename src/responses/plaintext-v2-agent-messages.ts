@@ -11,6 +11,16 @@ const PLAINTEXT_V2_AGENT_MESSAGE_TOOLS = new Set([
   "followup_task",
 ]);
 
+const PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES = new Map<string, string>([
+  ["spawn_agent", "start_delegated_task"],
+  ["send_message", "deliver_delegated_message"],
+  ["followup_task", "continue_delegated_task"],
+]);
+
+const PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES = new Map<string, string>(
+  [...PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES].map(([name, alias]) => [alias, name]),
+);
+
 export function shouldPreparePlaintextV2AgentMessages(args: {
   enabled: boolean;
   inboundWire: string;
@@ -185,27 +195,93 @@ function hasAgentMessageEncryptionMarker(tool: Record<string, unknown>): boolean
     && tool.parameters.properties.message.encrypted === true;
 }
 
-function withoutAgentMessageEncryptionMarker(tool: Record<string, unknown>): Record<string, unknown> {
-  if (
-    !hasAgentMessageEncryptionMarker(tool)
-    || !isPlainObject(tool.parameters)
-    || !isPlainObject(tool.parameters.properties)
-    || !isPlainObject(tool.parameters.properties.message)
-  ) {
-    return tool;
-  }
+function rewriteAgentMessageToolDeclaration(tool: Record<string, unknown>): Record<string, unknown> {
+  const alias = tool.type === "function" && typeof tool.name === "string"
+    ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES.get(tool.name)
+    : undefined;
+  if (!alias) return tool;
 
-  const { encrypted: _encrypted, ...messageSchema } = tool.parameters.properties.message;
-  return {
-    ...tool,
-    parameters: {
-      ...tool.parameters,
-      properties: {
-        ...tool.parameters.properties,
-        message: messageSchema,
+  let rewritten: Record<string, unknown> = { ...tool, name: alias };
+  if (
+    hasAgentMessageEncryptionMarker(tool)
+    && isPlainObject(tool.parameters)
+    && isPlainObject(tool.parameters.properties)
+    && isPlainObject(tool.parameters.properties.message)
+  ) {
+    const { encrypted: _encrypted, ...messageSchema } = tool.parameters.properties.message;
+    rewritten = {
+      ...rewritten,
+      parameters: {
+        ...tool.parameters,
+        properties: {
+          ...tool.parameters.properties,
+          message: messageSchema,
+        },
       },
-    },
-  };
+    };
+  }
+  return rewritten;
+}
+
+function hasAgentMessageToolAliasCatalogConflict(catalogs: readonly unknown[][]): boolean {
+  for (const tools of catalogs) {
+    for (const tool of tools) {
+      if (
+        !isPlainObject(tool)
+        || tool.type !== "namespace"
+        || tool.name !== COLLABORATION_NAMESPACE
+        || !Array.isArray(tool.tools)
+      ) {
+        continue;
+      }
+      if (tool.tools.some(child => (
+        isPlainObject(child)
+        && typeof child.name === "string"
+        && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(child.name)
+      ))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasAgentMessageToolAliasReference(value: unknown): boolean {
+  if (!isPlainObject(value) || !isToolIdentity(value) || typeof value.name !== "string") {
+    return false;
+  }
+  if (
+    value.namespace === COLLABORATION_NAMESPACE
+    && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(value.name)
+  ) {
+    return true;
+  }
+  for (const prefix of [COLLABORATION_NAME_PREFIX, COLLABORATION_DOTTED_NAME_PREFIX]) {
+    if (
+      value.name.startsWith(prefix)
+      && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(value.name.slice(prefix.length))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasAgentMessageToolAliasReferenceConflict(body: Record<string, unknown>): boolean {
+  if (hasAgentMessageToolAliasReference(body.tool_choice)) return true;
+  if (
+    isPlainObject(body.tool_choice)
+    && Array.isArray(body.tool_choice.tools)
+    && body.tool_choice.tools.some(hasAgentMessageToolAliasReference)
+  ) {
+    return true;
+  }
+  if (!Array.isArray(body.input)) return false;
+  return body.input.some(item => (
+    isPlainObject(item)
+    && (item.type === "function_call" || item.type === "custom_tool_call")
+    && hasAgentMessageToolAliasReference(item)
+  ));
 }
 
 function hasFlattenedCollaborationDeclarationConflict(
@@ -258,7 +334,7 @@ function rewriteToolCatalog(tools: unknown[]): {
       return tool;
     }
     const childTools = tool.tools.map(child => (
-      isPlainObject(child) ? withoutAgentMessageEncryptionMarker(child) : child
+      isPlainObject(child) ? rewriteAgentMessageToolDeclaration(child) : child
     ));
     namespaceAliased = true;
     changed = true;
@@ -280,7 +356,10 @@ function aliasCollaborationReference(
   const canCarryNamespace = isToolIdentity(value);
   let rewritten = value;
   if (canCarryNamespace && value.namespace === COLLABORATION_NAMESPACE) {
-    rewritten = { ...rewritten, namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE };
+    const name = (type === "function" || type === "function_call") && typeof value.name === "string"
+      ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES.get(value.name) ?? value.name
+      : value.name;
+    rewritten = { ...rewritten, namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE, name };
   }
   if (type === "namespace" && value.name === COLLABORATION_NAMESPACE) {
     rewritten = { ...rewritten, name: PLAINTEXT_V2_COLLABORATION_NAMESPACE };
@@ -290,9 +369,14 @@ function aliasCollaborationReference(
     && value.name.startsWith(COLLABORATION_NAME_PREFIX)
     && collaborationToolNames.has(value.name.slice(COLLABORATION_NAME_PREFIX.length))
   ) {
+    const childName = value.name.slice(COLLABORATION_NAME_PREFIX.length);
     rewritten = {
       ...rewritten,
-      name: `${PLAINTEXT_V2_COLLABORATION_NAME_PREFIX}${value.name.slice(COLLABORATION_NAME_PREFIX.length)}`,
+      name: `${PLAINTEXT_V2_COLLABORATION_NAME_PREFIX}${
+        (type === "function" || type === "function_call")
+          ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES.get(childName) ?? childName
+          : childName
+      }`,
     };
   } else if (
     canCarryNamespace
@@ -300,9 +384,14 @@ function aliasCollaborationReference(
     && value.name.startsWith(COLLABORATION_DOTTED_NAME_PREFIX)
     && collaborationToolNames.has(value.name.slice(COLLABORATION_DOTTED_NAME_PREFIX.length))
   ) {
+    const childName = value.name.slice(COLLABORATION_DOTTED_NAME_PREFIX.length);
     rewritten = {
       ...rewritten,
-      name: `${PLAINTEXT_V2_COLLABORATION_DOTTED_NAME_PREFIX}${value.name.slice(COLLABORATION_DOTTED_NAME_PREFIX.length)}`,
+      name: `${PLAINTEXT_V2_COLLABORATION_DOTTED_NAME_PREFIX}${
+        (type === "function" || type === "function_call")
+          ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES.get(childName) ?? childName
+          : childName
+      }`,
     };
   }
   return rewritten;
@@ -331,8 +420,8 @@ function aliasCollaborationToolChoice(
 /**
  * Prepare v2 collaboration tools for plaintext messages on the canonical ChatGPT wire.
  *
- * `collaboration` is a backend-reserved namespace, so changing its schema alone is rejected.
- * The namespace is therefore request-scoped and restored on every client-facing response.
+ * ChatGPT reserves both `collaboration` and the three message-tool names. The request therefore
+ * uses fixed, request-scoped aliases for both, then restores every identity before Codex sees it.
  */
 export function preparePlaintextV2AgentMessages(body: unknown): {
   body: unknown;
@@ -348,6 +437,8 @@ export function preparePlaintextV2AgentMessages(body: unknown): {
     || hasOptimizedReferenceConflict(body)
     || hasToolSearchCollaborationConflict(body)
     || hasFlattenedCollaborationDeclarationConflict(catalogs, catalogInfo.toolNames)
+    || hasAgentMessageToolAliasCatalogConflict(catalogs)
+    || hasAgentMessageToolAliasReferenceConflict(body)
   ) {
     return { body, namespaceAliased: false, toolNames: new Set() };
   }
@@ -432,16 +523,27 @@ function reserveIdentities(context: RestoreContext, count: number): boolean {
   return true;
 }
 
-function declaredChildName(name: unknown, toolNames: ReadonlySet<string>): string | undefined {
+function declaredChildName(
+  name: unknown,
+  toolNames: ReadonlySet<string>,
+  allowAgentMessageAlias: boolean,
+): string | undefined {
   if (typeof name !== "string") return undefined;
   if (toolNames.has(name)) return name;
-  if (name.startsWith(PLAINTEXT_V2_COLLABORATION_NAME_PREFIX)) {
-    const childName = name.slice(PLAINTEXT_V2_COLLABORATION_NAME_PREFIX.length);
-    return toolNames.has(childName) ? childName : undefined;
+  if (allowAgentMessageAlias) {
+    const restoredName = PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.get(name);
+    if (restoredName && toolNames.has(restoredName)) return restoredName;
   }
-  if (name.startsWith(PLAINTEXT_V2_COLLABORATION_DOTTED_NAME_PREFIX)) {
-    const childName = name.slice(PLAINTEXT_V2_COLLABORATION_DOTTED_NAME_PREFIX.length);
-    return toolNames.has(childName) ? childName : undefined;
+  for (const prefix of [
+    PLAINTEXT_V2_COLLABORATION_NAME_PREFIX,
+    PLAINTEXT_V2_COLLABORATION_DOTTED_NAME_PREFIX,
+  ]) {
+    if (!name.startsWith(prefix)) continue;
+    const childName = name.slice(prefix.length);
+    const restoredChildName = allowAgentMessageAlias
+      ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.get(childName) ?? childName
+      : childName;
+    return toolNames.has(restoredChildName) ? restoredChildName : undefined;
   }
   return undefined;
 }
@@ -459,7 +561,17 @@ function restoreToolIdentity(
     && value.type === "namespace"
     && value.name === PLAINTEXT_V2_COLLABORATION_NAMESPACE
   ) {
-    return { value: { ...value, name: COLLABORATION_NAMESPACE }, changed: true, overflow: false };
+    const children = restoreIdentityList(value.tools, context, false);
+    if (children.overflow) return { ...unchanged(value), overflow: true };
+    return {
+      value: {
+        ...value,
+        name: COLLABORATION_NAMESPACE,
+        ...(children.changed ? { tools: children.value } : {}),
+      },
+      changed: true,
+      overflow: false,
+    };
   }
 
   const identityType = value.type;
@@ -473,7 +585,10 @@ function restoreToolIdentity(
     return unchanged(value);
   }
 
-  const childName = declaredChildName(value.name, context.toolNames);
+  const allowAgentMessageAlias = identityType === "function"
+    || identityType === "function_call"
+    || identityType === "response.function_call_arguments.done";
+  const childName = declaredChildName(value.name, context.toolNames, allowAgentMessageAlias);
   if (!childName) return unchanged(value);
 
   let restored = value;
@@ -482,7 +597,10 @@ function restoreToolIdentity(
     restored = { ...restored, namespace: COLLABORATION_NAMESPACE };
     changed = true;
   }
-  if (typeof value.name === "string" && value.name.startsWith(PLAINTEXT_V2_COLLABORATION_NAME_PREFIX)) {
+  if (allowAgentMessageAlias && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(value.name as string)) {
+    restored = { ...restored, name: childName };
+    changed = true;
+  } else if (typeof value.name === "string" && value.name.startsWith(PLAINTEXT_V2_COLLABORATION_NAME_PREFIX)) {
     restored = { ...restored, name: `${COLLABORATION_NAME_PREFIX}${childName}` };
     changed = true;
   } else if (
@@ -593,7 +711,12 @@ export function restorePlaintextV2AgentMessageCallsInJson(
   payload: string,
   toolNames: ReadonlySet<string>,
 ): string {
-  if (!payload.includes(PLAINTEXT_V2_COLLABORATION_NAMESPACE)) return payload;
+  if (
+    !payload.includes(PLAINTEXT_V2_COLLABORATION_NAMESPACE)
+    && ![...PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.keys()].some(alias => payload.includes(alias))
+  ) {
+    return payload;
+  }
 
   let value: unknown;
   try {

@@ -81,6 +81,11 @@ describe("plaintext v2 agent message request preparation", () => {
     ]);
     expect(namespace.name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
     expect(additionalNamespace.name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(spawn.name).toBe("start_delegated_task");
+    expect(send.name).toBe("deliver_delegated_message");
+    expect(followup.name).toBe("continue_delegated_task");
+    expect(additional.name).toBe("continue_delegated_task");
+    expect(wait.name).toBe("wait_agent");
     expect(message(spawn).encrypted).toBeUndefined();
     expect(message(send).encrypted).toBeUndefined();
     expect(message(additional).encrypted).toBeUndefined();
@@ -124,6 +129,7 @@ describe("plaintext v2 agent message request preparation", () => {
     const privateMessage = ((privateTool.parameters as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).message;
 
     expect(privateMessage.encrypted).toBe(true);
+    expect(privateTool.name).toBe("send_message");
   });
 
   test("does not strip an independent flat tool beside a collaboration namespace", () => {
@@ -142,6 +148,7 @@ describe("plaintext v2 agent message request preparation", () => {
     const flatTool = (prepared.body as typeof body).tools[1] as Record<string, unknown>;
     const flatMessage = ((flatTool.parameters as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).message;
     expect(flatMessage.encrypted).toBe(true);
+    expect(flatTool.name).toBe("send_message");
   });
 
   test("aliases selectors and replayed calls with the rewritten collaboration catalog", () => {
@@ -179,8 +186,10 @@ describe("plaintext v2 agent message request preparation", () => {
 
     expect(result.tools[0]!.name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
     expect(result.tool_choice.tools[0]!.namespace).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(result.tool_choice.tools[0]!.name).toBe("deliver_delegated_message");
     expect(result.tool_choice.tools[1]!.namespace).toBe("private_mail");
     expect(result.input[0]!.namespace).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(result.input[0]!.name).toBe("start_delegated_task");
     expect(result.input[1]).toEqual(replayedOutput);
   });
 
@@ -197,6 +206,7 @@ describe("plaintext v2 agent message request preparation", () => {
     const prepared = preparePlaintextV2AgentMessages(body);
     expect((prepared.body as typeof body).tool_choice.namespace)
       .toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect((prepared.body as typeof body).tool_choice.name).toBe("continue_delegated_task");
   });
 
   test("aliases both supported qualified-name forms using declared child names", () => {
@@ -216,8 +226,10 @@ describe("plaintext v2 agent message request preparation", () => {
     };
 
     const result = preparePlaintextV2AgentMessages(body).body as typeof body;
-    expect(result.tool_choice.name).toBe(`${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__spawn_agent`);
-    expect(result.input[0]!.name).toBe(`${PLAINTEXT_V2_COLLABORATION_NAMESPACE}.send_message`);
+    expect(result.tool_choice.name)
+      .toBe(`${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__start_delegated_task`);
+    expect(result.input[0]!.name)
+      .toBe(`${PLAINTEXT_V2_COLLABORATION_NAMESPACE}.deliver_delegated_message`);
   });
 
   test("aliases every duplicate collaboration declaration in one request", () => {
@@ -302,7 +314,47 @@ describe("plaintext v2 agent message request preparation", () => {
     const prepared = preparePlaintextV2AgentMessages(body);
     expect((prepared.body as typeof body).tools[0]!.name)
       .toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect((prepared.body as typeof body).tools[0]!.tools[0]!.name)
+      .toBe("start_delegated_task");
     expect(prepared.namespaceAliased).toBe(true);
+  });
+
+  test("leaves the whole request untouched when a collaboration child already uses a private tool alias", () => {
+    const body = {
+      tools: [{
+        type: "namespace",
+        name: "collaboration",
+        tools: [
+          collaborationTool("spawn_agent"),
+          collaborationTool("start_delegated_task"),
+        ],
+      }],
+    };
+
+    const prepared = preparePlaintextV2AgentMessages(body);
+    expect(prepared.body).toBe(body);
+    expect(prepared.namespaceAliased).toBe(false);
+  });
+
+  test("leaves the whole request untouched when replay history already uses a private tool alias", () => {
+    const body = {
+      tools: [{
+        type: "namespace",
+        name: "collaboration",
+        tools: [collaborationTool("spawn_agent")],
+      }],
+      input: [{
+        type: "function_call",
+        call_id: "call-private-name",
+        namespace: "collaboration",
+        name: "start_delegated_task",
+        arguments: "{}",
+      }],
+    };
+
+    const prepared = preparePlaintextV2AgentMessages(body);
+    expect(prepared.body).toBe(body);
+    expect(prepared.namespaceAliased).toBe(false);
   });
 
   test("leaves the whole request untouched when the private alias already exists", () => {
@@ -393,18 +445,18 @@ describe("plaintext v2 agent message response restoration", () => {
         tool_choice: {
           type: "function",
           namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-          name: "spawn_agent",
+          name: "start_delegated_task",
         },
         tools: [{
           type: "namespace",
           name: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-          tools: [],
+          tools: [{ type: "function", name: "start_delegated_task" }],
         }],
         output: [
           {
             type: "function_call",
             namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-            name: "spawn_agent",
+            name: "start_delegated_task",
             arguments: JSON.stringify({
               message: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
             }),
@@ -412,7 +464,7 @@ describe("plaintext v2 agent message response restoration", () => {
           },
           {
             type: "function_call",
-            name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__send_message`,
+            name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__deliver_delegated_message`,
             arguments: "{}",
             encrypted_function_args: [],
           },
@@ -444,7 +496,10 @@ describe("plaintext v2 agent message response restoration", () => {
     expect(flattened!.encrypted_function_args).toEqual([]);
     expect(toolOutput!.output).toEqual({ namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE });
     expect(restored.response.tool_choice.namespace).toBe("collaboration");
+    expect(restored.response.tool_choice.name).toBe("spawn_agent");
     expect(restored.response.tools[0]!.name).toBe("collaboration");
+    expect((restored.response.tools[0]!.tools as Array<Record<string, unknown>>)[0]!.name)
+      .toBe("spawn_agent");
   });
 
   test("restores the identity on streamed function-call argument completion", () => {
@@ -452,7 +507,7 @@ describe("plaintext v2 agent message response restoration", () => {
       type: "response.function_call_arguments.done",
       item_id: "fc-spawn",
       namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-      name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__spawn_agent`,
+      name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__start_delegated_task`,
       arguments: JSON.stringify({ message: PLAINTEXT_V2_COLLABORATION_NAMESPACE }),
       encrypted_function_args: [],
     });
@@ -473,11 +528,26 @@ describe("plaintext v2 agent message response restoration", () => {
     }
   });
 
+  test("restores an unqualified private tool alias in streamed JSON", () => {
+    const payload = JSON.stringify({
+      type: "function_call",
+      name: "start_delegated_task",
+      arguments: JSON.stringify({ message: "plain assignment" }),
+      encrypted_function_args: [],
+    });
+
+    const restored = JSON.parse(
+      restorePlaintextV2AgentMessageCallsInJson(payload, declaredToolNames),
+    ) as Record<string, unknown>;
+    expect(restored.name).toBe("spawn_agent");
+    expect(restored.encrypted_function_args).toEqual([]);
+  });
+
   test("leaves undeclared aliases and nested extension metadata untouched", () => {
     const extensionCall = {
       type: "function_call",
       namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-      name: "spawn_agent",
+      name: "start_delegated_task",
     };
     const payload = JSON.stringify({
       type: "response.completed",
@@ -492,7 +562,7 @@ describe("plaintext v2 agent message response restoration", () => {
           {
             type: "function_call",
             namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-            name: "spawn_agent",
+            name: "start_delegated_task",
             arguments: "{}",
           },
         ],
@@ -523,7 +593,7 @@ describe("plaintext v2 agent message response restoration", () => {
       output: Array.from({ length: 10_001 }, () => ({
         type: "function_call",
         namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-        name: "spawn_agent",
+        name: "start_delegated_task",
       })),
     };
     const payload = JSON.stringify(value);
@@ -604,6 +674,7 @@ describe("canonical Responses adapter plaintext v2 integration", () => {
     const message = ((spawn.parameters as Record<string, unknown>).properties as Record<string, Record<string, unknown>>).message;
 
     expect(namespace.name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(spawn.name).toBe("start_delegated_task");
     expect(message.encrypted).toBeUndefined();
     expect([...(request.plaintextV2AgentMessageToolNames ?? [])]).toEqual(["spawn_agent"]);
     expect(rawBody.tools[0]!.name).toBe("collaboration");

@@ -104,7 +104,7 @@ function completedResponsePayload(id = "resp-plaintext-v2") {
       type: "function_call",
       call_id: "call-spawn",
       namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-      name: "spawn_agent",
+      name: "start_delegated_task",
       arguments: JSON.stringify({ message: "plain assignment" }),
       encrypted_function_args: [],
     }],
@@ -126,7 +126,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
           type: "response.function_call_arguments.done",
           item_id: "fc-spawn",
           namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-          name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__spawn_agent`,
+          name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__start_delegated_task`,
           arguments: JSON.stringify({ message: "plain assignment" }),
           encrypted_function_args: [],
         })}\n\nevent: response.completed\ndata: ${JSON.stringify({
@@ -144,11 +144,18 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     );
     const clientBody = await response.text();
     const sentBody = JSON.parse(sentBodies[0]!) as {
-      tools: Array<{ name: string; tools: Array<{ parameters: { properties: { message: Record<string, unknown> } } }> }>;
+      tools: Array<{
+        name: string;
+        tools: Array<{
+          name: string;
+          parameters: { properties: { message: Record<string, unknown> } };
+        }>;
+      }>;
     };
 
     expect(sentBodies).toHaveLength(1);
     expect(sentBody.tools[0]!.name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(sentBody.tools[0]!.tools[0]!.name).toBe("start_delegated_task");
     expect(sentBody.tools[0]!.tools[0]!.parameters.properties.message.encrypted).toBeUndefined();
     expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
     expect(clientBody).toContain('"namespace":"collaboration"');
@@ -360,7 +367,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
             type: "function_call",
             call_id: `call-${index}`,
             namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-            name: "spawn_agent",
+            name: "start_delegated_task",
             arguments: "{}",
           })),
         }

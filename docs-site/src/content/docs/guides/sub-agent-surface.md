@@ -139,8 +139,9 @@ v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `ag
 content when you control the caller.
 
 The experimental `plaintextV2AgentMessages: true` option attempts to prevent application-layer
-encryption for eligible new native ChatGPT v2 tool calls. It removes the message marker under a
-request-scoped namespace alias and restores `collaboration` in the response. It handles
+encryption for eligible new native ChatGPT v2 tool calls. It assigns request-scoped aliases to the
+namespace and three reserved message-tool names, removes the message marker, and restores the
+original identities in the response. It handles
 `spawn_agent`, `send_message`, and `followup_task` and adds no recovery request. HTTPS remains
 encrypted, but task text can be retained in Codex history, routed-provider requests, and local
 response/debug state. Existing ciphertext is unchanged, and the option depends on undocumented
