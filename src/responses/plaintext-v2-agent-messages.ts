@@ -56,9 +56,11 @@ function responseToolCatalogs(body: Record<string, unknown>): unknown[][] {
 function collaborationCatalogInfo(catalogs: readonly unknown[][]): {
   hasV2Catalog: boolean;
   toolNames: Set<string>;
+  aliasedAgentMessageToolNames: Set<string>;
 } {
   let hasV2Catalog = false;
   const toolNames = new Set<string>();
+  const aliasedAgentMessageToolNames = new Set<string>();
   for (const tools of catalogs) {
     for (const tool of tools) {
       if (
@@ -76,12 +78,18 @@ function collaborationCatalogInfo(catalogs: readonly unknown[][]): {
           && typeof child.name === "string"
         ) {
           toolNames.add(child.name);
+          if (
+            child.type === "function"
+            && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_ALIASES.has(child.name)
+          ) {
+            aliasedAgentMessageToolNames.add(child.name);
+          }
           if (child.type === "function" && child.name === "spawn_agent") hasV2Catalog = true;
         }
       }
     }
   }
-  return { hasV2Catalog, toolNames };
+  return { hasV2Catalog, toolNames, aliasedAgentMessageToolNames };
 }
 
 export function hasPlaintextV2CollaborationCatalog(body: unknown): boolean {
@@ -223,24 +231,33 @@ function rewriteAgentMessageToolDeclaration(tool: Record<string, unknown>): Reco
   return rewritten;
 }
 
-function hasAgentMessageToolAliasCatalogConflict(catalogs: readonly unknown[][]): boolean {
-  for (const tools of catalogs) {
-    for (const tool of tools) {
+function hasAgentMessageToolAliasCatalogConflict(
+  body: Record<string, unknown>,
+  catalogs: readonly unknown[][],
+): boolean {
+  const pending = [...catalogs];
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
       if (
-        !isPlainObject(tool)
-        || tool.type !== "namespace"
-        || tool.name !== COLLABORATION_NAMESPACE
-        || !Array.isArray(tool.tools)
+        isPlainObject(item)
+        && item.type === "tool_search_output"
+        && Array.isArray(item.tools)
       ) {
-        continue;
+        pending.push(item.tools);
       }
-      if (tool.tools.some(child => (
-        isPlainObject(child)
-        && typeof child.name === "string"
-        && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(child.name)
-      ))) {
+    }
+  }
+  while (pending.length > 0) {
+    const tools = pending.pop()!;
+    for (const tool of tools) {
+      if (!isPlainObject(tool)) continue;
+      if (
+        typeof tool.name === "string"
+        && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(tool.name)
+      ) {
         return true;
       }
+      if (tool.type === "namespace" && Array.isArray(tool.tools)) pending.push(tool.tools);
     }
   }
   return false;
@@ -250,12 +267,7 @@ function hasAgentMessageToolAliasReference(value: unknown): boolean {
   if (!isPlainObject(value) || !isToolIdentity(value) || typeof value.name !== "string") {
     return false;
   }
-  if (
-    value.namespace === COLLABORATION_NAMESPACE
-    && PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(value.name)
-  ) {
-    return true;
-  }
+  if (PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.has(value.name)) return true;
   for (const prefix of [COLLABORATION_NAME_PREFIX, COLLABORATION_DOTTED_NAME_PREFIX]) {
     if (
       value.name.startsWith(prefix)
@@ -427,8 +439,16 @@ export function preparePlaintextV2AgentMessages(body: unknown): {
   body: unknown;
   namespaceAliased: boolean;
   toolNames: ReadonlySet<string>;
+  aliasedAgentMessageToolNames: ReadonlySet<string>;
 } {
-  if (!isPlainObject(body)) return { body, namespaceAliased: false, toolNames: new Set() };
+  if (!isPlainObject(body)) {
+    return {
+      body,
+      namespaceAliased: false,
+      toolNames: new Set(),
+      aliasedAgentMessageToolNames: new Set(),
+    };
+  }
   const catalogs = responseToolCatalogs(body);
   const catalogInfo = collaborationCatalogInfo(catalogs);
   if (
@@ -437,10 +457,15 @@ export function preparePlaintextV2AgentMessages(body: unknown): {
     || hasOptimizedReferenceConflict(body)
     || hasToolSearchCollaborationConflict(body)
     || hasFlattenedCollaborationDeclarationConflict(catalogs, catalogInfo.toolNames)
-    || hasAgentMessageToolAliasCatalogConflict(catalogs)
+    || hasAgentMessageToolAliasCatalogConflict(body, catalogs)
     || hasAgentMessageToolAliasReferenceConflict(body)
   ) {
-    return { body, namespaceAliased: false, toolNames: new Set() };
+    return {
+      body,
+      namespaceAliased: false,
+      toolNames: new Set(),
+      aliasedAgentMessageToolNames: new Set(),
+    };
   }
 
   let namespaceAliased = false;
@@ -488,7 +513,12 @@ export function preparePlaintextV2AgentMessages(body: unknown): {
   }
 
   if (!namespaceAliased || (tools === body.tools && input === body.input && toolChoice === body.tool_choice)) {
-    return { body, namespaceAliased: false, toolNames: new Set() };
+    return {
+      body,
+      namespaceAliased: false,
+      toolNames: new Set(),
+      aliasedAgentMessageToolNames: new Set(),
+    };
   }
   return {
     body: {
@@ -499,10 +529,20 @@ export function preparePlaintextV2AgentMessages(body: unknown): {
     },
     namespaceAliased,
     toolNames: new Set(catalogInfo.toolNames),
+    aliasedAgentMessageToolNames: new Set(catalogInfo.aliasedAgentMessageToolNames),
   };
 }
 
 const MAX_RESTORED_TOOL_IDENTITIES = 10_000;
+export const PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE =
+  "plaintext V2 agent-message response exceeded the safe identity limit";
+
+export class PlaintextV2AgentMessageRestoreOverflowError extends Error {
+  constructor() {
+    super(PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
+    this.name = "PlaintextV2AgentMessageRestoreOverflowError";
+  }
+}
 
 type RestoreOutcome = {
   value: unknown;
@@ -512,6 +552,7 @@ type RestoreOutcome = {
 
 type RestoreContext = {
   toolNames: ReadonlySet<string>;
+  aliasedAgentMessageToolNames: ReadonlySet<string>;
   remainingIdentities: number;
 };
 
@@ -526,23 +567,30 @@ function reserveIdentities(context: RestoreContext, count: number): boolean {
 function declaredChildName(
   name: unknown,
   toolNames: ReadonlySet<string>,
+  aliasedAgentMessageToolNames: ReadonlySet<string>,
   allowAgentMessageAlias: boolean,
 ): string | undefined {
   if (typeof name !== "string") return undefined;
-  if (toolNames.has(name)) return name;
   if (allowAgentMessageAlias) {
     const restoredName = PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.get(name);
-    if (restoredName && toolNames.has(restoredName)) return restoredName;
+    if (restoredName) {
+      return aliasedAgentMessageToolNames.has(restoredName) && toolNames.has(restoredName)
+        ? restoredName
+        : undefined;
+    }
   }
+  if (toolNames.has(name)) return name;
   for (const prefix of [
     PLAINTEXT_V2_COLLABORATION_NAME_PREFIX,
     PLAINTEXT_V2_COLLABORATION_DOTTED_NAME_PREFIX,
   ]) {
     if (!name.startsWith(prefix)) continue;
     const childName = name.slice(prefix.length);
-    const restoredChildName = allowAgentMessageAlias
-      ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.get(childName) ?? childName
-      : childName;
+    const restoredAlias = allowAgentMessageAlias
+      ? PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.get(childName)
+      : undefined;
+    if (restoredAlias && !aliasedAgentMessageToolNames.has(restoredAlias)) return undefined;
+    const restoredChildName = restoredAlias ?? childName;
     return toolNames.has(restoredChildName) ? restoredChildName : undefined;
   }
   return undefined;
@@ -585,10 +633,20 @@ function restoreToolIdentity(
     return unchanged(value);
   }
 
-  const allowAgentMessageAlias = identityType === "function"
+  const allowAgentMessageAlias = (
+    identityType === "function"
     || identityType === "function_call"
-    || identityType === "response.function_call_arguments.done";
-  const childName = declaredChildName(value.name, context.toolNames, allowAgentMessageAlias);
+    || identityType === "response.function_call_arguments.done"
+  ) && (
+    value.namespace === undefined
+    || value.namespace === PLAINTEXT_V2_COLLABORATION_NAMESPACE
+  );
+  const childName = declaredChildName(
+    value.name,
+    context.toolNames,
+    context.aliasedAgentMessageToolNames,
+    allowAgentMessageAlias,
+  );
   if (!childName) return unchanged(value);
 
   let restored = value;
@@ -673,12 +731,14 @@ function restoreResponseSnapshot(value: unknown, context: RestoreContext): Resto
 export function restorePlaintextV2AgentMessageCalls(
   value: unknown,
   toolNames: ReadonlySet<string>,
+  aliasedAgentMessageToolNames: ReadonlySet<string> = toolNames,
 ): { value: unknown; changed: boolean; overflowed: boolean } {
   if (toolNames.size === 0 || !isPlainObject(value)) {
     return { value, changed: false, overflowed: false };
   }
   const context: RestoreContext = {
     toolNames,
+    aliasedAgentMessageToolNames,
     remainingIdentities: MAX_RESTORED_TOOL_IDENTITIES,
   };
 
@@ -707,29 +767,56 @@ export function restorePlaintextV2AgentMessageCalls(
     : { value, changed: false, overflowed: false };
 }
 
-export function restorePlaintextV2AgentMessageCallsInJson(
+export function restorePlaintextV2AgentMessageCallsInJsonResult(
   payload: string,
   toolNames: ReadonlySet<string>,
-): string {
+  aliasedAgentMessageToolNames: ReadonlySet<string> = toolNames,
+): { value: string; changed: boolean; overflowed: boolean } {
   if (
     !payload.includes(PLAINTEXT_V2_COLLABORATION_NAMESPACE)
     && ![...PLAINTEXT_V2_AGENT_MESSAGE_TOOL_NAMES.keys()].some(alias => payload.includes(alias))
   ) {
-    return payload;
+    return { value: payload, changed: false, overflowed: false };
   }
 
   let value: unknown;
   try {
     value = JSON.parse(payload);
   } catch {
-    return payload;
+    return { value: payload, changed: false, overflowed: false };
   }
-  const restored = restorePlaintextV2AgentMessageCalls(value, toolNames);
-  return restored.changed ? JSON.stringify(restored.value) : payload;
+  const restored = restorePlaintextV2AgentMessageCalls(
+    value,
+    toolNames,
+    aliasedAgentMessageToolNames,
+  );
+  if (restored.overflowed) return { value: payload, changed: false, overflowed: true };
+  return restored.changed
+    ? { value: JSON.stringify(restored.value), changed: true, overflowed: false }
+    : { value: payload, changed: false, overflowed: false };
+}
+
+export function restorePlaintextV2AgentMessageCallsInJson(
+  payload: string,
+  toolNames: ReadonlySet<string>,
+  aliasedAgentMessageToolNames: ReadonlySet<string> = toolNames,
+): string {
+  const restored = restorePlaintextV2AgentMessageCallsInJsonResult(
+    payload,
+    toolNames,
+    aliasedAgentMessageToolNames,
+  );
+  if (restored.overflowed) throw new PlaintextV2AgentMessageRestoreOverflowError();
+  return restored.value;
 }
 
 export function createPlaintextV2AgentMessageCallRestoreRewrite(
   toolNames: ReadonlySet<string>,
+  aliasedAgentMessageToolNames: ReadonlySet<string> = toolNames,
 ): (payload: string) => string {
-  return payload => restorePlaintextV2AgentMessageCallsInJson(payload, toolNames);
+  return payload => restorePlaintextV2AgentMessageCallsInJson(
+    payload,
+    toolNames,
+    aliasedAgentMessageToolNames,
+  );
 }

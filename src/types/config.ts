@@ -554,7 +554,7 @@ export interface OcxConfig {
    * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
    */
   keepNativeChatGptOnV1?: boolean;
-  /** Experimental, default-off plaintext delivery for native v2 collaboration messages. */
+  /** Experimental plaintext delivery for native v2 collaboration messages; disabled unless true. */
   plaintextV2AgentMessages?: boolean;
   /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */
   agentTaskRecovery?: {

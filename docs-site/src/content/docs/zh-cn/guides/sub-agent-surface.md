@@ -86,9 +86,13 @@ opencodex 会安全失败，而不是转发空任务或不可读任务：
 
 恢复选项是选择原生 ChatGPT 子级、在 combo 中添加原生 ChatGPT 目标、在异构 provider 委派中使用 v1，或者在你控制调用方时将任务作为明文 v2 `agent_message` 内容重新发送。
 
-实验性的 `plaintextV2AgentMessages: true` 会尝试取消符合条件的新原生 ChatGPT v2 工具调用的
-应用层加密。它临时改写 namespace 和三个保留工具名，并删除消息字段的加密标记；响应返回 Codex
-前会恢复原 namespace 与工具名。它处理 `spawn_agent`、`send_message` 和 `followup_task`，不会增加恢复请求。
+新配置不会写入实验性的 `plaintextV2AgentMessages` 字段，只有显式设置为 `true` 才会启用。
+调用方必须使用 Responses 格式，最终目标必须采用 `adapter: "openai-responses"`、
+`authMode: "forward"` 和准确的基础地址 `https://chatgpt.com/backend-api/codex`。OpenAI API key
+provider、自定义兼容网关、最终发往其他 provider 的请求，以及非 Responses 调用都不会被改写。
+对于符合条件的新原生 ChatGPT v2 工具调用，该选项会临时改写 namespace 和三个保留工具名，
+并删除消息字段的加密标记；响应返回 Codex 前会恢复原 namespace 与工具名。它处理
+`spawn_agent`、`send_message` 和 `followup_task`，不会增加恢复请求。
 HTTPS 仍会加密网络传输，但任务文字可能保存在 Codex 历史、外部模型请求和本地响应或调试文件中。
 已有密文不会改变。该选项依赖 ChatGPT 和 Codex 未公开的行为。详见
 [明文 v2 代理消息](/zh-cn/reference/configuration/agents/#明文-v2-代理消息)。

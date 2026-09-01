@@ -367,8 +367,9 @@ import {
 } from "../../responses/namespace-tool-compat";
 import {
   createPlaintextV2AgentMessageCallRestoreRewrite,
+  PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
   restorePlaintextV2AgentMessageCalls,
-  restorePlaintextV2AgentMessageCallsInJson,
+  restorePlaintextV2AgentMessageCallsInJsonResult,
   shouldPreparePlaintextV2AgentMessages,
 } from "../../responses/plaintext-v2-agent-messages";
 import {
@@ -3628,9 +3629,12 @@ async function handleResponsesInner(
 
   let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();
   let plaintextV2AgentMessageToolNames: ReadonlySet<string> = new Set();
+  let plaintextV2AgentMessageAliasedToolNames: ReadonlySet<string> = new Set();
   const refreshRequestToolAliases = (builtRequest: AdapterRequest): void => {
     routedNamespaceToolAliases = builtRequest.convertedRoutedNamespaceToolAliases ?? new Map();
     plaintextV2AgentMessageToolNames = builtRequest.plaintextV2AgentMessageToolNames ?? new Set();
+    plaintextV2AgentMessageAliasedToolNames =
+      builtRequest.plaintextV2AgentMessageAliasedToolNames ?? new Set();
   };
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
@@ -3862,10 +3866,14 @@ async function handleResponsesInner(
           declaredWireToolNames,
         ).value as { id?: unknown; output?: unknown; status?: unknown };
         const plaintextRestore = plaintextV2AgentMessageToolNames.size > 0
-          ? restorePlaintextV2AgentMessageCalls(customRestoredResponse, plaintextV2AgentMessageToolNames)
+          ? restorePlaintextV2AgentMessageCalls(
+            customRestoredResponse,
+            plaintextV2AgentMessageToolNames,
+            plaintextV2AgentMessageAliasedToolNames,
+          )
           : undefined;
-        // Keep the client response intact on structural overflow, but do not persist an
-        // internal namespace that a later turn (or a disabled option) could replay.
+        // Never persist a response whose aliases exceeded the restoration bound; the client
+        // relay independently replaces it with a safe error.
         if (plaintextRestore?.overflowed) return;
         const restoredResponse = (plaintextRestore?.value ?? customRestoredResponse) as typeof response;
         if (
@@ -4185,7 +4193,7 @@ async function handleResponsesInner(
           headers: selectedForwardHeaders,
           translatorBudget,
         });
-        refreshRoutedNamespaceToolAliases(request);
+        refreshRequestToolAliases(request);
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
         refreshUndeclaredToolGuard(request);
@@ -4512,7 +4520,13 @@ async function handleResponsesInner(
     // treating a successful body as SSE when the caller requested streaming.
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
-      || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
+      || (
+        plaintextV2AgentMessageToolNames.size === 0
+        && upstreamResponse.ok
+        && !!upstreamResponse.body
+        && !passthroughCt
+        && parsed.stream
+      );
     const recordTerminalOutcome = codexForwardTerminalOutcomeRecorder(
       config,
       authCtx,
@@ -4706,7 +4720,10 @@ async function handleResponsesInner(
         // this request-scoped alias after that copy and before the client guard runs.
         plaintextV2AgentMessageToolNames.size > 0
           ? payloadRewriteAsBlockRewrite(
-            createPlaintextV2AgentMessageCallRestoreRewrite(plaintextV2AgentMessageToolNames),
+            createPlaintextV2AgentMessageCallRestoreRewrite(
+              plaintextV2AgentMessageToolNames,
+              plaintextV2AgentMessageAliasedToolNames,
+            ),
           )
           : undefined,
         createResponsesFieldBackfillBlockRewrite(),
@@ -4899,6 +4916,7 @@ async function handleResponsesInner(
       }
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
+      let plaintextV2RestoreOverflowed = false;
       const clientJson = (() => {
         const restoredImageGen = restoreImageGenCallsInJson(text, imageGenCallAliases);
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
@@ -4922,9 +4940,15 @@ async function handleResponsesInner(
         const repaired = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair)
           ? repairResponsesSnapshotJson(restoredToolSearch, outboundRequestBody)
           : restoredToolSearch;
-        const restoredPlaintextV2Namespace = plaintextV2AgentMessageToolNames.size > 0
-          ? restorePlaintextV2AgentMessageCallsInJson(repaired, plaintextV2AgentMessageToolNames)
-          : repaired;
+        const plaintextV2Restore = plaintextV2AgentMessageToolNames.size > 0
+          ? restorePlaintextV2AgentMessageCallsInJsonResult(
+            repaired,
+            plaintextV2AgentMessageToolNames,
+            plaintextV2AgentMessageAliasedToolNames,
+          )
+          : undefined;
+        if (plaintextV2Restore?.overflowed) plaintextV2RestoreOverflowed = true;
+        const restoredPlaintextV2Namespace = plaintextV2Restore?.value ?? repaired;
         const modelRewritten = parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId
           ? rewriteResponsesModelJson(backfillResponsesFieldsJson(restoredPlaintextV2Namespace), parsed._responseModelId)
           : backfillResponsesFieldsJson(restoredPlaintextV2Namespace);
@@ -4936,6 +4960,13 @@ async function handleResponsesInner(
           ? rewriteReasoningSummaryInJsonString(modelRewritten)
           : modelRewritten;
       })();
+      if (plaintextV2RestoreOverflowed) {
+        return formatErrorResponse(
+          502,
+          "upstream_error",
+          PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
+        );
+      }
       // #1700: same fail-closed policy as the SSE relay above. Both the plain JSON answer and
       // the reframed-SSE branch below are built from this body, so one check covers them. This
       // runs BEFORE the continuation cache write below: a refused turn must not become state a
@@ -5038,6 +5069,14 @@ async function handleResponsesInner(
         statusText: upstreamResponse.statusText,
         headers,
       });
+    }
+    if (plaintextV2AgentMessageToolNames.size > 0) {
+      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        "plaintext V2 agent-message response used an unsupported content type",
+      );
     }
     // An unclassified passthrough body is relayed directly and has no bounded completion observer;
     // use the same non-error-status success boundary as SSE instead of retaining per-stream state.

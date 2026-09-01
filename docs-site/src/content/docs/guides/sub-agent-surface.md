@@ -138,10 +138,14 @@ Recovery options are to select a native ChatGPT child, add a native ChatGPT targ
 v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
 content when you control the caller.
 
-The experimental `plaintextV2AgentMessages: true` option attempts to prevent application-layer
-encryption for eligible new native ChatGPT v2 tool calls. It assigns request-scoped aliases to the
-namespace and three reserved message-tool names, removes the message marker, and restores the
-original identities in the response. It handles
+The experimental `plaintextV2AgentMessages` field is unset in a fresh config and runs only when set
+to `true`. The caller must use the Responses wire, and the final destination must use
+`adapter: "openai-responses"`, `authMode: "forward"`, and the exact base URL
+`https://chatgpt.com/backend-api/codex`. OpenAI API-key providers, custom compatible gateways,
+routes to other providers, and non-Responses callers are excluded. For an eligible new native
+ChatGPT v2 tool call, the option assigns request-scoped aliases to the namespace and three reserved
+message-tool names, removes the message marker, and restores the original identities in the
+response. It handles
 `spawn_agent`, `send_message`, and `followup_task` and adds no recovery request. HTTPS remains
 encrypted, but task text can be retained in Codex history, routed-provider requests, and local
 response/debug state. Existing ciphertext is unchanged, and the option depends on undocumented

@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import {
+  PlaintextV2AgentMessageRestoreOverflowError,
   PLAINTEXT_V2_COLLABORATION_NAMESPACE,
   preparePlaintextV2AgentMessages,
   restorePlaintextV2AgentMessageCalls,
   restorePlaintextV2AgentMessageCallsInJson,
+  restorePlaintextV2AgentMessageCallsInJsonResult,
   shouldPreparePlaintextV2AgentMessages,
 } from "../src/responses/plaintext-v2-agent-messages";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -336,6 +338,82 @@ describe("plaintext v2 agent message request preparation", () => {
     expect(prepared.namespaceAliased).toBe(false);
   });
 
+  test("leaves the whole request untouched when a top-level tool uses a fixed message alias", () => {
+    const body = {
+      tools: [
+        {
+          type: "namespace",
+          name: "collaboration",
+          tools: [collaborationTool("spawn_agent")],
+        },
+        { type: "function", name: "start_delegated_task", parameters: { type: "object" } },
+      ],
+    };
+
+    const prepared = preparePlaintextV2AgentMessages(body);
+    expect(prepared.body).toBe(body);
+    expect(prepared.namespaceAliased).toBe(false);
+  });
+
+  test("leaves the whole request untouched when another namespace uses a fixed message alias", () => {
+    const body = {
+      tools: [{
+        type: "namespace",
+        name: "collaboration",
+        tools: [collaborationTool("spawn_agent")],
+      }],
+      input: [{
+        type: "additional_tools",
+        tools: [{
+          type: "namespace",
+          name: "foreign",
+          tools: [{ type: "function", name: "deliver_delegated_message", parameters: { type: "object" } }],
+        }],
+      }],
+    };
+
+    const prepared = preparePlaintextV2AgentMessages(body);
+    expect(prepared.body).toBe(body);
+    expect(prepared.namespaceAliased).toBe(false);
+  });
+
+  test("scans tool-search declarations and foreign references for fixed message aliases", () => {
+    const catalog = [{
+      type: "namespace",
+      name: "collaboration",
+      tools: [collaborationTool("spawn_agent")],
+    }];
+    const cases = [
+      {
+        tools: catalog,
+        input: [{
+          type: "tool_search_output",
+          tools: [{ type: "function", name: "continue_delegated_task", parameters: { type: "object" } }],
+        }],
+      },
+      {
+        tools: catalog,
+        tool_choice: { type: "function", name: "start_delegated_task" },
+      },
+      {
+        tools: catalog,
+        input: [{
+          type: "function_call",
+          namespace: "foreign",
+          name: "deliver_delegated_message",
+          call_id: "foreign-call",
+          arguments: "{}",
+        }],
+      },
+    ];
+
+    for (const body of cases) {
+      const prepared = preparePlaintextV2AgentMessages(body);
+      expect(prepared.body).toBe(body);
+      expect(prepared.namespaceAliased).toBe(false);
+    }
+  });
+
   test("leaves the whole request untouched when replay history already uses a private tool alias", () => {
     const body = {
       tools: [{
@@ -543,6 +621,42 @@ describe("plaintext v2 agent message response restoration", () => {
     expect(restored.encrypted_function_args).toEqual([]);
   });
 
+  test("does not restore a fixed alias authenticated by another namespace", () => {
+    const payload = JSON.stringify({
+      type: "function_call",
+      namespace: "foreign",
+      name: "start_delegated_task",
+      arguments: "{}",
+    });
+
+    expect(restorePlaintextV2AgentMessageCallsInJson(payload, declaredToolNames)).toBe(payload);
+  });
+
+  test("restores only message aliases that this request actually generated", () => {
+    const prepared = preparePlaintextV2AgentMessages({
+      tools: [{
+        type: "namespace",
+        name: "collaboration",
+        tools: [
+          collaborationTool("spawn_agent"),
+          { type: "custom", name: "send_message" },
+        ],
+      }],
+    });
+    const payload = JSON.stringify({
+      type: "function_call",
+      name: "deliver_delegated_message",
+      arguments: "{}",
+    });
+
+    expect([...prepared.aliasedAgentMessageToolNames]).toEqual(["spawn_agent"]);
+    expect(restorePlaintextV2AgentMessageCallsInJson(
+      payload,
+      prepared.toolNames,
+      prepared.aliasedAgentMessageToolNames,
+    )).toBe(payload);
+  });
+
   test("leaves undeclared aliases and nested extension metadata untouched", () => {
     const extensionCall = {
       type: "function_call",
@@ -598,7 +712,13 @@ describe("plaintext v2 agent message response restoration", () => {
     };
     const payload = JSON.stringify(value);
 
-    expect(restorePlaintextV2AgentMessageCallsInJson(payload, declaredToolNames)).toBe(payload);
+    expect(restorePlaintextV2AgentMessageCallsInJsonResult(payload, declaredToolNames)).toEqual({
+      value: payload,
+      changed: false,
+      overflowed: true,
+    });
+    expect(() => restorePlaintextV2AgentMessageCallsInJson(payload, declaredToolNames))
+      .toThrow(PlaintextV2AgentMessageRestoreOverflowError);
     expect(restorePlaintextV2AgentMessageCalls(value, declaredToolNames)).toEqual({
       value,
       changed: false,
@@ -677,6 +797,7 @@ describe("canonical Responses adapter plaintext v2 integration", () => {
     expect(spawn.name).toBe("start_delegated_task");
     expect(message.encrypted).toBeUndefined();
     expect([...(request.plaintextV2AgentMessageToolNames ?? [])]).toEqual(["spawn_agent"]);
+    expect([...(request.plaintextV2AgentMessageAliasedToolNames ?? [])]).toEqual(["spawn_agent"]);
     expect(rawBody.tools[0]!.name).toBe("collaboration");
     expect(JSON.stringify(rawBody)).toContain('"encrypted":true');
   });
@@ -687,5 +808,6 @@ describe("canonical Responses adapter plaintext v2 integration", () => {
 
     expect(sent).toEqual(rawBody);
     expect(request.plaintextV2AgentMessageToolNames).toBeUndefined();
+    expect(request.plaintextV2AgentMessageAliasedToolNames).toBeUndefined();
   });
 });

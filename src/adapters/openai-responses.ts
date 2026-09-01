@@ -2111,6 +2111,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let convertedRoutedToolSearchNames: Set<string> | undefined;
       let convertedRoutedNamespaceToolAliases: Map<string, { namespace: string; name: string; kind: "function" | "custom" }> | undefined;
       let plaintextV2AgentMessageToolNames: ReadonlySet<string> | undefined;
+      let plaintextV2AgentMessageAliasedToolNames: ReadonlySet<string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -2221,6 +2222,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         plaintextV2AgentMessageToolNames = prepared.namespaceAliased
           ? prepared.toolNames
           : undefined;
+        plaintextV2AgentMessageAliasedToolNames = prepared.namespaceAliased
+          ? prepared.aliasedAgentMessageToolNames
+          : undefined;
       }
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
       const sanitizedBody = normalizeToolSchemas(
@@ -2282,6 +2286,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         ...(convertedRoutedToolSearchNames ? { convertedRoutedToolSearchNames } : {}),
         ...(convertedRoutedNamespaceToolAliases ? { convertedRoutedNamespaceToolAliases } : {}),
         ...(plaintextV2AgentMessageToolNames ? { plaintextV2AgentMessageToolNames } : {}),
+        ...(plaintextV2AgentMessageAliasedToolNames ? { plaintextV2AgentMessageAliasedToolNames } : {}),
         ...(tierLog ? { tierLog } : {}),
       };
     },

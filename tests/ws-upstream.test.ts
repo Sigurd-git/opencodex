@@ -4,6 +4,10 @@ import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
 import { isWin32EagerRewrite } from "../src/lib/bun-stream-caps";
 import {
+  PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
+  PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+} from "../src/responses/plaintext-v2-agent-messages";
+import {
   bunSupportsBoundedCodexWsRelay,
   CODEX_WS_CREATE_FRAME_LIMIT_BYTES,
   codexWsCreateFrameExceedsLimit,
@@ -268,6 +272,38 @@ describe("handleResponses Codex WS relay selection", () => {
     });
   }
 
+  function plaintextV2CollaborationRequest(): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        stream: true,
+        input: [
+          {
+            type: "additional_tools",
+            tools: [{
+              type: "namespace",
+              name: "collaboration",
+              tools: [
+                {
+                  type: "function",
+                  name: "spawn_agent",
+                  parameters: {
+                    type: "object",
+                    properties: { message: { type: "string", encrypted: true } },
+                  },
+                },
+                { type: "function", name: "send_message", parameters: { type: "object" } },
+              ],
+            }],
+          },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "delegate" }] },
+        ],
+      }),
+    });
+  }
+
   test("a successful WS upgrade bypasses the configured legacy tee path", async () => {
     installFake(ws => {
       ws.emit("open", {});
@@ -366,35 +402,7 @@ describe("handleResponses Codex WS relay selection", () => {
       });
     });
     const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
-    const request = new Request("http://localhost/v1/responses", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer test" },
-      body: JSON.stringify({
-        model: "gpt-5.6-luna",
-        stream: true,
-        input: [
-          {
-            type: "additional_tools",
-            tools: [{
-              type: "namespace",
-              name: "collaboration",
-              tools: [
-                {
-                  type: "function",
-                  name: "spawn_agent",
-                  parameters: {
-                    type: "object",
-                    properties: { message: { type: "string", encrypted: true } },
-                  },
-                },
-                { type: "function", name: "send_message", parameters: { type: "object" } },
-              ],
-            }],
-          },
-          { type: "message", role: "user", content: [{ type: "input_text", text: "delegate" }] },
-        ],
-      }),
-    });
+    const request = plaintextV2CollaborationRequest();
 
     const response = await handleResponses(request, config, { model: "", provider: "" }, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
@@ -437,6 +445,46 @@ describe("handleResponses Codex WS relay selection", () => {
     expect(completed.response.output[0]!.namespace).toBe("collaboration");
     expect(completed.response.output[0]!.name).toBe("spawn_agent");
     expect(completed.response.output[0]!.encrypted_function_args).toEqual([]);
+  });
+
+  test("plaintext v2 restoration overflow fails closed on the WS upstream path", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "r-plaintext-v2-ws-overflow",
+            status: "completed",
+            output: Array.from({ length: 10_000 }, (_, index) => ({
+              type: "function_call",
+              call_id: `call-${index}`,
+              namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+              name: "start_delegated_task",
+              arguments: "{}",
+            })),
+          },
+        }),
+      });
+    });
+    const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
+
+    const response = await handleResponses(
+      plaintextV2CollaborationRequest(),
+      config,
+      { model: "", provider: "" },
+      { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME },
+    );
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(isEagerRelaySseResponse(response)).toBe(true);
+    const clientText = await response.text();
+    expect(clientText).toContain("event: response.failed");
+    expect(clientText).toContain(PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
+    expect(clientText).toContain("data: [DONE]");
+    expect(clientText).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(clientText).not.toContain("start_delegated_task");
+    expect(FakeWebSocket.instances[0]!.closed).toBe(true);
   });
 
   test("an HTTP fallback remains on the configured legacy tee path", async () => {

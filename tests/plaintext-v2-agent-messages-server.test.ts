@@ -6,7 +6,11 @@ import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { CODEX_FORWARD_BASE_URL } from "../src/providers/openai-tiers";
-import { PLAINTEXT_V2_COLLABORATION_NAMESPACE } from "../src/responses/plaintext-v2-agent-messages";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import {
+  PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
+  PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+} from "../src/responses/plaintext-v2-agent-messages";
 import { clearResponseStateForTests } from "../src/responses/state";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
@@ -18,7 +22,11 @@ afterEach(() => {
   clearResponseStateForTests();
 });
 
-function config(enabled: boolean, snapshotRepair = false): OcxConfig {
+function config(
+  enabled: boolean,
+  snapshotRepair = false,
+  streamMode?: "auto" | "legacy-tee" | "eager-relay",
+): OcxConfig {
   return {
     defaultProvider: "native",
     providers: {
@@ -30,6 +38,7 @@ function config(enabled: boolean, snapshotRepair = false): OcxConfig {
       },
     },
     plaintextV2AgentMessages: enabled,
+    ...(streamMode ? { streamMode } : {}),
   } as OcxConfig;
 }
 
@@ -111,6 +120,20 @@ function completedResponsePayload(id = "resp-plaintext-v2") {
   };
 }
 
+function overLimitResponsePayload(id = "resp-plaintext-v2-overflow") {
+  return {
+    id,
+    status: "completed",
+    output: Array.from({ length: 10_000 }, (_, index) => ({
+      type: "function_call",
+      call_id: `call-${index}`,
+      namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+      name: "start_delegated_task",
+      arguments: "{}",
+    })),
+  };
+}
+
 describe("plaintext v2 agent messages at the Responses server boundary", () => {
   test("rewrites the canonical request and restores every SSE response snapshot", async () => {
     const sentBodies: string[] = [];
@@ -179,6 +202,25 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
     expect(clientBody).toContain('"namespace":"collaboration"');
     expect(clientBody).toContain('"encrypted_function_args":[]');
+  });
+
+  test("rejects an unclassified successful response while restoration is required", async () => {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify(completedResponsePayload()),
+      { status: 200 },
+    )) as typeof fetch;
+
+    const response = await handleResponses(
+      collaborationRequest(),
+      config(true),
+      { model: "", provider: "" },
+    );
+    const clientBody = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(clientBody).toContain("unsupported content type");
+    expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(clientBody).not.toContain("start_delegated_task");
   });
 
   test("restores aliases after SSE snapshot repair copies request tools and tool choice", async () => {
@@ -325,6 +367,14 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
       }
 
       const sentBodies: string[] = [];
+      const entitlementSnapshot = {
+        modelsByAccount: new Map([
+          ["pool-a", new Set(["gpt-5.6-sol"])],
+          ["pool-b", new Set(["gpt-5.6-sol"])],
+        ]),
+        confirmedAccountIds: new Set(["pool-a", "pool-b"]),
+        credentialIdentities: new Map<string, string>(),
+      };
       globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
         sentBodies.push(typeof init?.body === "string" ? init.body : "");
         if (sentBodies.length === 1) {
@@ -340,6 +390,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
         collaborationRequest({ model: "gpt-5.6-sol" }),
         poolConfig,
         { model: "", provider: "" },
+        { resolveCodexModelEntitlements: async () => entitlementSnapshot },
       );
       const clientBody = await response.text();
 
@@ -353,24 +404,92 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     });
   });
 
-  test("returns an over-limit response but does not retain its private alias for continuation", async () => {
+  test("fails closed for over-limit streamed responses in both relay modes", async () => {
+    for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
+      globalThis.fetch = (async () => new Response(
+        `event: response.completed\ndata: ${JSON.stringify({
+          type: "response.completed",
+          response: overLimitResponsePayload(`resp-${streamMode}`),
+        })}\n\ndata: [DONE]\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )) as typeof fetch;
+
+      const response = await handleResponses(
+        collaborationRequest(),
+        config(true, false, streamMode),
+        { model: "", provider: "" },
+      );
+      const clientBody = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(clientBody).toContain('"type":"response.failed"');
+      expect(clientBody).toContain(PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
+      expect(clientBody).toContain("data: [DONE]");
+      expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+      expect(clientBody).not.toContain("start_delegated_task");
+    }
+  });
+
+  test("rejects over-limit bounded JSON before HTTP or WebSocket reframing", async () => {
+    const fixtureId = "plaintext-v2-bounded-json-fixture";
+    const fixtureModel = "fixture-model";
+    const mutableRegistry = PROVIDER_REGISTRY as unknown as Array<Record<string, unknown>>;
+    mutableRegistry.push({
+      id: fixtureId,
+      label: "Plaintext V2 bounded JSON fixture",
+      baseUrl: CODEX_FORWARD_BASE_URL,
+      adapter: "openai-responses",
+      authKind: "forward",
+      models: [fixtureModel],
+      defaultModel: fixtureModel,
+      modelResponsesUpstreamStreaming: { [fixtureModel]: false },
+    });
+    const fixtureConfig = {
+      defaultProvider: fixtureId,
+      providers: {
+        [fixtureId]: {
+          adapter: "openai-responses",
+          baseUrl: CODEX_FORWARD_BASE_URL,
+          authMode: "forward",
+        },
+      },
+      plaintextV2AgentMessages: true,
+    } as OcxConfig;
+
+    try {
+      for (const inboundTransport of [undefined, "websocket"] as const) {
+        globalThis.fetch = (async () => Response.json(overLimitResponsePayload())) as typeof fetch;
+        const response = await handleResponses(
+          collaborationRequest({ model: `${fixtureId}/${fixtureModel}` }),
+          fixtureConfig,
+          { model: "", provider: "" },
+          inboundTransport
+            ? { inboundWire: "responses", inboundTransport }
+            : undefined,
+        );
+        const clientBody = await response.text();
+
+        expect(response.status).toBe(502);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        expect(clientBody).toContain(PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
+        expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+        expect(clientBody).not.toContain("start_delegated_task");
+        expect(clientBody).not.toContain("data: [DONE]");
+      }
+    } finally {
+      const index = mutableRegistry.findIndex(entry => entry.id === fixtureId);
+      if (index >= 0) mutableRegistry.splice(index, 1);
+    }
+  });
+
+  test("rejects an over-limit JSON response and does not retain it for continuation", async () => {
     const sentBodies: string[] = [];
     let requestIndex = 0;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       sentBodies.push(typeof init?.body === "string" ? init.body : "");
       requestIndex += 1;
       const payload = requestIndex === 1
-        ? {
-          id: "resp-plaintext-v2-overflow",
-          status: "completed",
-          output: Array.from({ length: 10_001 }, (_, index) => ({
-            type: "function_call",
-            call_id: `call-${index}`,
-            namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
-            name: "start_delegated_task",
-            arguments: "{}",
-          })),
-        }
+        ? overLimitResponsePayload()
         : { id: "resp-after-overflow", status: "completed", output: [] };
       return Response.json(payload);
     }) as typeof fetch;
@@ -381,8 +500,10 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
       { model: "", provider: "" },
     );
     const firstBody = await first.text();
-    expect(first.status).toBe(200);
-    expect(firstBody).toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(first.status).toBe(502);
+    expect(firstBody).toContain(PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
+    expect(firstBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(firstBody).not.toContain("start_delegated_task");
 
     const second = await handleResponses(
       collaborationRequest({
